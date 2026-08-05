@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { getBoards, getCatalog, getThread } from './api';
 import { Store } from './store';
 import { PROVIDERS, translate, type Provider, type TranslateConfig } from './translate';
+import { SettingsPanel } from './settings-panel';
 import type { Board, CatalogPage, Post } from './types';
 
 const VIEW_ID = '4chan.browser';
@@ -118,12 +119,7 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
     const provider = (this.cfg().get<Provider>('provider') ?? 'free-google') as Provider;
     const meta = PROVIDERS[provider];
     const apiKey = meta.needsKey ? (await this.secrets.get(secretKey(provider))) ?? '' : '';
-    return {
-      provider,
-      baseUrl: this.cfg().get<string>('aiBaseUrl') || meta.baseUrl,
-      model: this.cfg().get<string>('aiModel') || meta.model,
-      apiKey,
-    };
+    return { provider, baseUrl: meta.baseUrl, model: meta.model, apiKey };
   }
 
   // 可选引擎 = 免费(Google/MyMemory) + 已配置 Key 的 AI
@@ -141,17 +137,13 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
     const pick = await vscode.window.showQuickPick(
       [
         { label: '$(checklist) 选择翻译引擎', action: 'choose', description: PROVIDERS[current]?.label },
-        { label: '$(settings-gear) 高级设置（打开设置页）', action: 'advanced' },
-        { label: '$(key) 设置 API Key', action: 'apikey' },
-        { label: '$(beaker) 测试当前引擎', action: 'test' },
+        { label: '$(settings-gear) 高级设置（配置 AI 模型）', action: 'advanced' },
       ],
       { placeHolder: '翻译设置' },
     );
     if (!pick) return;
     if (pick.action === 'choose') await this.chooseEngine();
     else if (pick.action === 'advanced') await this.advancedSettings();
-    else if (pick.action === 'apikey') await this.setApiKey();
-    else if (pick.action === 'test') await this.testEngine();
   }
 
   private async chooseEngine() {
@@ -170,54 +162,15 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
     const p = chosen.id as Provider;
     await this.cfg().update('provider', p, vscode.ConfigurationTarget.Global);
     void vscode.window.showInformationMessage(`已切换为：${PROVIDERS[p].label}`);
-    // 选了需要 Key 的引擎但还没配 → 直接引导配置
+    // 选了需要 Key 的引擎但还没配 → 打开高级设置
     if (PROVIDERS[p].needsKey && !(await this.secrets.get(secretKey(p)))) {
-      await this.setApiKey();
+      await this.advancedSettings();
     }
   }
 
-  // 打开 VSCode 原生设置页，集中配置 provider / 模型 / BaseUrl（API Key 走命令安全存储）
+  // 打开自定义高级设置面板（单列配置各 AI 引擎的 API Key）
   private async advancedSettings() {
-    await vscode.commands.executeCommand(
-      'workbench.action.openSettings',
-      '@ext:vscode-4chan.translate',
-    );
-  }
-
-  // API Key 走 SecretStorage（不进明文 settings.json）；针对当前 provider 设置
-  async setApiKey() {
-    const current = (this.cfg().get<Provider>('provider') ?? 'free-google') as Provider;
-    const meta = PROVIDERS[current];
-    if (!meta.needsKey) {
-      void vscode.window.showInformationMessage(`${meta.label} 为免费引擎，无需 API Key`);
-      return;
-    }
-    const key = await vscode.window.showInputBox({
-      prompt: `${meta.label} · API Key（清空并回车 = 清除）`,
-      password: true,
-      placeHolder: 'sk-...',
-      ignoreFocusOut: true,
-    });
-    if (key === undefined) return; // Esc 取消
-    if (!key.trim()) {
-      await this.secrets.delete(secretKey(current));
-      void vscode.window.showInformationMessage(`已清除 ${meta.label} 的 API Key`);
-      return;
-    }
-    await this.secrets.store(secretKey(current), key.trim());
-    void vscode.window.showInformationMessage(`已保存 ${meta.label} 的 API Key`);
-  }
-
-  private async testEngine() {
-    const cfg = await this.buildTranslateConfig();
-    const meta = PROVIDERS[cfg.provider];
-    try {
-      const out = await translate('Hello, this is a translation test.', cfg);
-      void vscode.window.showInformationMessage(`✓ ${meta.label} 测试成功：${out}`);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      void vscode.window.showErrorMessage(`✗ ${meta.label} 测试失败：${msg}`);
-    }
+    await SettingsPanel.open(this.secrets);
   }
 
   private getHtml(webview: vscode.Webview): string {
@@ -274,10 +227,6 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('4chan.translate.menu', () => provider.openTranslateMenu()),
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('4chan.translate.setApiKey', () => provider.setApiKey()),
   );
 }
 

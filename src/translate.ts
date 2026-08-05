@@ -1,4 +1,4 @@
-// 翻译适配器：免费(Google/MyMemory) + AI(OpenAI兼容/DeepSeek/Anthropic/Gemini/自定义)
+// 翻译适配器：免费(Google/MyMemory) + AI(DeepSeek/智谱/OpenAI/通义千问，均为 OpenAI 兼容)
 // 密钥由 host 传入，绝不下发 webview；报错时抹掉密钥相关字段。
 
 export type Provider =
@@ -7,11 +7,9 @@ export type Provider =
   | 'openai'
   | 'deepseek'
   | 'glm'
-  | 'anthropic'
-  | 'gemini'
-  | 'custom';
+  | 'qwen';
 
-export type AdapterKind = 'free' | 'openai' | 'anthropic' | 'gemini';
+export type AdapterKind = 'free' | 'openai';
 
 export interface ProviderMeta {
   label: string;
@@ -19,17 +17,45 @@ export interface ProviderMeta {
   baseUrl: string;
   model: string;
   needsKey: boolean;
+  /** 获取 API Key 的外部链接 */
+  keyLink?: string;
 }
 
 export const PROVIDERS: Record<Provider, ProviderMeta> = {
   'free-google': { label: 'Google 翻译（免费·非官方）', kind: 'free', baseUrl: '', model: '', needsKey: false },
   'free-mymemory': { label: 'MyMemory（免费·有额度）', kind: 'free', baseUrl: '', model: '', needsKey: false },
-  openai: { label: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', needsKey: true },
-  deepseek: { label: 'DeepSeek', kind: 'openai', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', needsKey: true },
-  glm: { label: '智谱 GLM', kind: 'openai', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', needsKey: true },
-  anthropic: { label: 'Anthropic Claude', kind: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-3-5-haiku-latest', needsKey: true },
-  gemini: { label: 'Google Gemini', kind: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.0-flash', needsKey: true },
-  custom: { label: '自定义（OpenAI 兼容）', kind: 'openai', baseUrl: '', model: '', needsKey: true },
+  deepseek: {
+    label: 'DeepSeek',
+    kind: 'openai',
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+    needsKey: true,
+    keyLink: 'https://platform.deepseek.com/api_keys',
+  },
+  glm: {
+    label: '智谱 GLM',
+    kind: 'openai',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    model: 'glm-4-flash',
+    needsKey: true,
+    keyLink: 'https://open.bigmodel.cn/usercenter/apikeys',
+  },
+  openai: {
+    label: 'OpenAI',
+    kind: 'openai',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+    needsKey: true,
+    keyLink: 'https://platform.openai.com/api-keys',
+  },
+  qwen: {
+    label: '通义千问',
+    kind: 'openai',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen-turbo',
+    needsKey: true,
+    keyLink: 'https://dashscope.console.aliyun.com/apiKey',
+  },
 };
 
 const SYSTEM_PROMPT =
@@ -53,10 +79,6 @@ export async function translate(text: string, cfg: TranslateConfig): Promise<str
       return cfg.provider === 'free-mymemory' ? myMemory(src) : google(src);
     case 'openai':
       return openaiCompatible(src, cfg);
-    case 'anthropic':
-      return anthropic(src, cfg);
-    case 'gemini':
-      return gemini(src, cfg);
   }
 }
 
@@ -101,7 +123,7 @@ async function myMemory(text: string): Promise<string> {
 }
 
 async function openaiCompatible(text: string, cfg: TranslateConfig): Promise<string> {
-  if (!cfg.apiKey) throw new Error('未设置 API Key（点 ⚙ → 设置 Key）');
+  if (!cfg.apiKey) throw new Error('未设置 API Key（点 ⚙ → 高级设置）');
   const base = (cfg.baseUrl || '').replace(/\/$/, '');
   if (!base) throw new Error('未设置 BaseUrl（点 ⚙ → 高级设置）');
   const res = await fetch(`${base}/chat/completions`, {
@@ -119,50 +141,6 @@ async function openaiCompatible(text: string, cfg: TranslateConfig): Promise<str
   if (!res.ok) throw new Error(await errMsg(res));
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const r = clean(data.choices?.[0]?.message?.content ?? '');
-  if (!r) throw new Error('AI 返回为空');
-  return r;
-}
-
-async function anthropic(text: string, cfg: TranslateConfig): Promise<string> {
-  if (!cfg.apiKey) throw new Error('未设置 API Key（点 ⚙ → 设置 Key）');
-  const base = (cfg.baseUrl || PROVIDERS.anthropic.baseUrl).replace(/\/$/, '');
-  const res = await fetch(`${base}/v1/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': cfg.apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: cfg.model || PROVIDERS.anthropic.model,
-      max_tokens: 2048,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: text }],
-    }),
-  });
-  if (!res.ok) throw new Error(await errMsg(res));
-  const data = (await res.json()) as { content?: { text?: string }[] };
-  const r = clean(data.content?.map((b) => b.text ?? '').join('') ?? '');
-  if (!r) throw new Error('AI 返回为空');
-  return r;
-}
-
-async function gemini(text: string, cfg: TranslateConfig): Promise<string> {
-  if (!cfg.apiKey) throw new Error('未设置 API Key（点 ⚙ → 设置 Key）');
-  const base = (cfg.baseUrl || PROVIDERS.gemini.baseUrl).replace(/\/$/, '');
-  const model = cfg.model || PROVIDERS.gemini.model;
-  const res = await fetch(`${base}/models/${model}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.apiKey },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: [{ role: 'user', parts: [{ text }] }],
-      generationConfig: { temperature: 0.2 },
-    }),
-  });
-  if (!res.ok) throw new Error(await errMsg(res));
-  const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-  const r = clean(data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '');
   if (!r) throw new Error('AI 返回为空');
   return r;
 }

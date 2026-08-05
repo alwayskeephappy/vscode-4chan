@@ -85,9 +85,13 @@ export function render(vscode: VsCodeApi) {
     };
   }
 
-  function paint() {
+  function paint(keepScroll = false) {
+    const prev = document.querySelector('.main');
+    const top = keepScroll && prev ? prev.scrollTop : 0;
     app.innerHTML = layout();
     bind();
+    const next = document.querySelector('.main');
+    if (next) next.scrollTop = top;
   }
 
   function boardOption(b: Board): string {
@@ -109,8 +113,10 @@ export function render(vscode: VsCodeApi) {
       main =
         `<div class="thread-back">
           <button id="back">← 返回</button>
-          <span class="thread-title">#${state.currentThread}</span>
-          <button id="translate-all" class="t-all" ${translatingAll ? 'disabled' : ''}>${translatingAll ? '翻译中…' : '翻译全部'}</button>
+          <div>
+              <span class="thread-title">#${state.currentThread}</span>
+              <button id="translate-all" class="t-all" ${translatingAll ? 'disabled' : ''}>${translatingAll ? '翻译中…' : '翻译全部'}</button>
+          </div>
         </div>` +
         `<div class="thread">${posts.map((p) => postHtml(p)).join('')}</div>`;
     } else {
@@ -137,11 +143,11 @@ export function render(vscode: VsCodeApi) {
         <select id="board-select">${opts}</select>
         <button id="fav-btn" class="icon-btn ${isFav ? 'on' : ''}" title="收藏/取消收藏">${isFav ? '★' : '☆'}</button>
         <button id="refresh" class="icon-btn" title="刷新">↻</button>
-        <button id="translate-settings" class="icon-btn" title="翻译设置">⚙</button>
         <label class="sfw" title="只看适合工作场合的版块"><input type="checkbox" id="sfw" ${state.sfwOnly ? 'checked' : ''} />SFW</label>
+        <button id="translate-settings" class="icon-btn" title="翻译设置">⚙</button>
       </div>
       <div class="main">${main}</div>
-      <div id="overlay" class="overlay hidden"><img id="overlay-img" alt="" /></div>
+      <div id="overlay" class="overlay hidden"><button id="overlay-close" class="overlay-close" title="关闭 (Esc)">✕</button><img id="overlay-img" alt="" /></div>
     `;
   }
 
@@ -246,12 +252,13 @@ export function render(vscode: VsCodeApi) {
     document.querySelectorAll<HTMLElement>('.post-img').forEach((el) => {
       el.addEventListener('click', () => {
         const src = el.dataset.full;
-        if (!src) return;
-        const overlay = document.getElementById('overlay')!;
-        const oi = document.getElementById('overlay-img') as HTMLImageElement;
-        oi.src = src;
-        overlay.classList.remove('hidden');
+        if (src) ovOpen(src);
       });
+    });
+
+    document.getElementById('overlay-close')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      ovClose();
     });
 
     // 帖内引用链接：>>123456 跳转高亮；http 外链交给宿主用系统浏览器打开
@@ -274,20 +281,53 @@ export function render(vscode: VsCodeApi) {
       });
     });
 
-    document.getElementById('overlay')?.addEventListener('click', () => {
-      document.getElementById('overlay')!.classList.add('hidden');
-    });
   }
 
-  // ESC 关闭图片预览遮罩（只注册一次，避免每次 paint 累积监听器）
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
+  // 图片预览查看器：缩放 / 拖拽 / 关闭（render 作用域注册一次，状态闭包持有）
+  let ovScale = 1, ovTx = 0, ovTy = 0;
+  const ovVisible = () => {
+    const o = document.getElementById('overlay');
+    return !!o && !o.classList.contains('hidden');
+  };
+  const ovApply = () => {
+    const oi = document.getElementById('overlay-img');
+    if (oi) oi.style.transform = `translate(${ovTx}px, ${ovTy}px) scale(${ovScale})`;
+  };
+  const ovReset = () => {
+    ovScale = 1; ovTx = 0; ovTy = 0;
+    const oi = document.getElementById('overlay-img');
+    if (oi) oi.style.transform = '';
+  };
+  const ovClose = () => {
+    document.getElementById('overlay')?.classList.add('hidden');
+    ovReset();
+  };
+  const ovOpen = (src: string) => {
     const overlay = document.getElementById('overlay');
-    if (overlay && !overlay.classList.contains('hidden')) {
-      overlay.classList.add('hidden');
-    }
-  });
+    const oi = document.getElementById('overlay-img') as HTMLImageElement | null;
+    if (!overlay || !oi) return;
+    oi.src = src;
+    ovReset();
+    overlay.classList.remove('hidden');
+  };
 
+  // ESC 关闭
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && ovVisible()) ovClose();
+  });
+  // 滚轮：阻止背景滚动 + 以鼠标位置为中心缩放
+  document.addEventListener('wheel', (e) => {
+    if (!ovVisible()) return;
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.12 : 0.89;
+    const ns = Math.max(0.2, Math.min(8, ovScale * factor));
+    const ox = window.innerWidth / 2, oy = window.innerHeight / 2;
+    const cx = e.clientX - ox - ovTx, cy = e.clientY - oy - ovTy;
+    ovTx = e.clientX - (cx * ns) / ovScale - ox;
+    ovTy = e.clientY - (cy * ns) / ovScale - oy;
+    ovScale = ns;
+    ovApply();
+  }, { passive: false });
   window.addEventListener('message', (e) => {
     const m = e.data;
     switch (m.type) {
@@ -324,12 +364,12 @@ export function render(vscode: VsCodeApi) {
           translating.delete(pkey(r.no));
         });
         translatingAll = false;
-        paint();
+        paint(true);
         break;
       case 'translateError': {
         if (m.no != null) translating.delete(pkey(m.no));
         translatingAll = false;
-        paint();
+        paint(true);
         const mainEl = document.querySelector('.main');
         mainEl?.insertAdjacentHTML('afterbegin', `<div class="err">⚠ 翻译失败：${esc(m.message)}</div>`);
         break;

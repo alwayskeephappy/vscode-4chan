@@ -1,7 +1,7 @@
 # vscode-4chan
 
 <p align="center">
-  <b>在 VS Code 内直接浏览 4chan，像刷知乎一样摸鱼。</b>
+  <b>在 VS Code 内直接浏览 4chan。</b>
 </p>
 
 <p align="center">

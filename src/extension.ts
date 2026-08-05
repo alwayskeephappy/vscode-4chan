@@ -9,6 +9,30 @@ const VIEW_ID = '4chan.browser';
 const CONFIG_NS = 'vscode-4chan.translate';
 const secretKey = (p: Provider) => `${CONFIG_NS}.key.${p}`;
 
+// 原图/视频兜底代理：webview 直连 i.4cdn.org 原图若被防盗链拦截(403)，
+// 改由扩展宿主用 Node fetch（不带 referer）抓取，转 base64 data URL 回传（不落盘）。
+const IMG_CACHE = new Map<string, { t: number; data: string }>();
+const IMG_CACHE_TTL = 30 * 60_000;
+const IMG_CACHE_MAX = 40;
+async function fetchImgBase64(url: string): Promise<string> {
+  const hit = IMG_CACHE.get(url);
+  if (hit && Date.now() - hit.t < IMG_CACHE_TTL) return hit.data;
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'vscode-4chan/0.1 (+developer tool)' },
+    redirect: 'follow',
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const ct = res.headers.get('content-type') || 'application/octet-stream';
+  const buf = Buffer.from(await res.arrayBuffer());
+  const data = `data:${ct};base64,${buf.toString('base64')}`;
+  IMG_CACHE.set(url, { t: Date.now(), data });
+  if (IMG_CACHE.size > IMG_CACHE_MAX) {
+    const oldest = IMG_CACHE.keys().next().value;
+    if (oldest !== undefined) IMG_CACHE.delete(oldest);
+  }
+  return data;
+}
+
 // Webview → Host
 type InMsg =
   | { type: 'init' }
@@ -18,7 +42,8 @@ type InMsg =
   | { type: 'setSfw'; value: boolean }
   | { type: 'openExternal'; url: string }
   | { type: 'translate'; posts: { no: number; text: string }[] }
-  | { type: 'openTranslateMenu' };
+  | { type: 'openTranslateMenu' }
+  | { type: 'img'; url: string };
 
 // Host → Webview
 type OutMsg =
@@ -28,7 +53,9 @@ type OutMsg =
   | { type: 'favorites'; favorites: string[] }
   | { type: 'translated'; results: { no: number; text: string }[] }
   | { type: 'translateError'; no?: number; message: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'img'; url: string; data: string }
+  | { type: 'imgError'; url: string; message: string };
 
 class FourChanViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
@@ -86,6 +113,15 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
           break;
         case 'openTranslateMenu':
           await this.openTranslateMenu();
+          break;
+        case 'img':
+          try {
+            const data = await fetchImgBase64(msg.url);
+            await send({ type: 'img', url: msg.url, data });
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            await send({ type: 'imgError', url: msg.url, message });
+          }
           break;
       }
     } catch (e) {
@@ -193,6 +229,7 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
     const csp = [
       `default-src 'none'`,
       `img-src ${webview.cspSource} https://i.4cdn.org https://s.4cdn.org https://a.4cdn.org data:`,
+      `media-src ${webview.cspSource} https://i.4cdn.org data:`,
       `script-src 'nonce-${nonce}'`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `font-src ${webview.cspSource}`,
@@ -203,6 +240,8 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <!-- i.4cdn.org 防盗链：完整原图请求带 vscode-webview referer 会返回 403，必须 no-referrer -->
+  <meta name="referrer" content="no-referrer" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>4chan</title>
   <link rel="stylesheet" href="${style}" />

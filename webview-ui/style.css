@@ -333,12 +333,127 @@ body {
   display: none;
 }
 
-.overlay img {
+.overlay img,
+.overlay video {
   max-width: 94%;
   max-height: 94%;
   object-fit: contain;
   transform-origin: center center;
   will-change: transform;
+  background: transparent;
+}
+
+.overlay img[hidden],
+.overlay video[hidden] {
+  display: none;
+}
+
+.overlay-loading {
+  position: fixed;
+  color: #fff;
+  font-size: 13px;
+  opacity: 0.85;
+  z-index: 102;
+  user-select: none;
+}
+
+.overlay-loading.hidden {
+  display: none;
+}
+
+.overlay-err.hidden {
+  display: none;
+}
+
+.overlay-err {
+  position: fixed;
+  left: 50%;
+  top: 56px;
+  transform: translateX(-50%);
+  max-width: 90%;
+  padding: 6px 12px;
+  border-radius: 4px;
+  background: rgba(180, 40, 40, 0.9);
+  color: #fff;
+  font-size: 12px;
+  z-index: 102;
+  text-align: center;
+  word-break: break-all;
+}
+
+/* 成人板块二次确认：页内遮罩弹窗 */
+.nsfw-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nsfw-modal.hidden {
+  display: none;
+}
+
+.nsfw-dialog {
+  width: min(320px, 86%);
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  padding: 16px 18px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.nsfw-title {
+  font-size: 1.05em;
+  font-weight: 600;
+  color: #f5a623;
+  margin-bottom: 10px;
+}
+
+.nsfw-text {
+  font-size: 1em;
+  line-height: 1.6;
+}
+
+.nsfw-text #nsfw-board {
+  font-weight: 600;
+  color: var(--vscode-terminal-ansiGreen);
+}
+
+.nsfw-text2 {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--vscode-panel-border);
+  font-size: 0.9em;
+  line-height: 1.6;
+  opacity: 0.75;
+}
+
+.nsfw-btns {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.nsfw-btns button {
+  border: none;
+  border-radius: 3px;
+  padding: 5px 14px;
+  cursor: pointer;
+  font-size: 1em;
+}
+
+#nsfw-cancel {
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.3));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+}
+
+#nsfw-ok {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
 }
 
 /* 被引用楼的高亮动画 */

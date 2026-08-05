@@ -34,6 +34,7 @@ export function render(vscode: VsCodeApi) {
   const state: State = saved ?? { boards: [], favorites: [], sfwOnly: true, view: 'catalog' };
 
   let pages: CatalogPage[] = [];
+  let currentPage = 0; // 当前 catalog 页码（0 起始）
   let catalogLoading = false; // 板块 catalog 请求进行中，用于显示加载占位
   let posts: Post[] = [];
   let threadBoard = state.currentBoard;
@@ -55,6 +56,75 @@ export function render(vscode: VsCodeApi) {
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
     return (tpl.content.textContent || '').trim();
+  }
+
+  // 构建分页器页码序列，-1 代表省略号。
+  // 恒定输出 maxSlots 个槽位（首 + 尾 + 省略号 + 中间窗口），保证恰好占满宽度。
+  function paginationRange(current: number, total: number, maxSlots: number): number[] {
+    if (total <= maxSlots) return Array.from({ length: total }, (_, i) => i);
+    const last = total - 1;
+    let ellL = 1, ellR = 1; // 先假设两侧都有省略号
+    let winLen = Math.max(1, maxSlots - 2 - ellL - ellR);
+    let start = current - Math.floor((winLen - 1) / 2);
+    let end = start + winLen - 1;
+    // 夹紧窗口并按需丢弃省略号，迭代两次直到稳定
+    for (let iter = 0; iter < 2; iter++) {
+      if (start < 1) start = 1;
+      if (end > last - 1) end = last - 1;
+      if (start <= 1) ellL = 0;
+      if (end >= last - 1) ellR = 0;
+      winLen = Math.max(1, maxSlots - 2 - ellL - ellR);
+      start = current - Math.floor((winLen - 1) / 2);
+      end = start + winLen - 1;
+      if (start < 1) { start = 1; end = start + winLen - 1; }
+      if (end > last - 1) { end = last - 1; start = end - winLen + 1; }
+    }
+    const r: number[] = [0];
+    if (ellL) r.push(-1);
+    for (let i = start; i <= end; i++) r.push(i);
+    if (ellR) r.push(-1);
+    r.push(last);
+    return r;
+  }
+
+  // 实测 .pg-pages 的可用宽度与单个按钮宽度，精确计算能容纳几个页码（绝不溢出）
+  // 上限 9：宽面板不贪婪填满，收敛到合理数量居中显示，留出余白
+  function fitPaginator() {
+    const total = pages.length;
+    if (total <= 1) return;
+    const container = document.querySelector<HTMLElement>('.pg-pages');
+    if (!container) return;
+    const avail = container.clientWidth;
+    const sample = container.querySelector<HTMLElement>('.pg-num');
+    if (!sample) return; // 还没渲染出按钮，等下次
+    const gap = 4;
+    const slotW = sample.offsetWidth + gap;
+    // 能容纳的页码槽位数：下限 5（窄面板不挤）、上限 9（宽面板不贪婪填满）
+    const measured = Math.floor((avail + gap) / slotW);
+    const maxFit = Math.max(5, Math.min(9, measured));
+    const nums = paginationRange(currentPage, total, maxFit);
+    container.innerHTML = nums
+      .map((p) => {
+        if (p === -1) return `<span class="pg-ellipsis">…</span>`;
+        const active = p === currentPage ? 'active' : '';
+        return `<button class="pg-btn pg-num ${active}" data-page="${p}">${p + 1}</button>`;
+      })
+      .join('');
+    bindPgNums();
+  }
+
+  // 翻页：更新页码并重渲染（fitPaginator 会按新宽度重排）
+  function gotoPage(p: number) {
+    currentPage = p;
+    paint();
+    document.querySelector('.main')?.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // 仅绑定数字按钮（fitPaginator 重渲染 .pg-pages 后调用）
+  function bindPgNums() {
+    document.querySelectorAll<HTMLElement>('.pg-pages .pg-num').forEach((el) => {
+      el.addEventListener('click', () => gotoPage(Number(el.dataset.page) || 0));
+    });
   }
 
   // 4chan 的 com 字段是受信 HTML，仍做基本净化：去掉脚本/事件，链接转 data-href 由我们处理点击
@@ -94,6 +164,8 @@ export function render(vscode: VsCodeApi) {
     const next = document.querySelector('.main');
     if (next) next.scrollTop = top;
     if (pendingNsfwBoard) showNsfwModal(pendingNsfwBoard); // 重建后保持确认框显示
+    // 渲染后按实测宽度精确排布分页器（恰好占满中间、绝不溢出）
+    fitPaginator();
   }
 
   function boardOption(b: Board): string {
@@ -107,6 +179,7 @@ export function render(vscode: VsCodeApi) {
     state.view = 'catalog';
     state.currentThread = undefined;
     pages = [];
+    currentPage = 0;
     catalogLoading = true;
     persist();
     paint();
@@ -123,6 +196,7 @@ export function render(vscode: VsCodeApi) {
     const isFav = state.currentBoard ? state.favorites.includes(state.currentBoard) : false;
 
     let main: string;
+    let paginatorBar = '';
     if (state.view === 'thread' && state.currentThread) {
       main =
         `<div class="thread-back">
@@ -134,8 +208,10 @@ export function render(vscode: VsCodeApi) {
         </div>` +
         `<div class="thread">${posts.map((p) => postHtml(p)).join('')}</div>`;
     } else {
-      const cards = pages
-        .flatMap((pg) => pg.threads)
+      // 分页：仅展示当前页的线程
+      const pg = pages[currentPage];
+      const threads = pg ? pg.threads : [];
+      const cards = threads
         .map((t) => {
           const thumb = imgUrl(state.currentBoard!, t, true);
           const img = thumb ? `<img loading="lazy" src="${thumb}" referrerpolicy="no-referrer" />` : `<div class="no-img">无图</div>`;
@@ -152,6 +228,20 @@ export function render(vscode: VsCodeApi) {
       main = `<div class="catalog">${
         cards || (catalogLoading ? '<div class="empty">加载中…</div>' : '<div class="empty">选择上方版块开始浏览</div>')
       }</div>`;
+      const totalPages = pages.length;
+      if (totalPages > 1) {
+        // 初始用一个较大窗口渲染（fitPaginator 会在 paint 后按实测宽度精确裁剪）
+        const pgNums = paginationRange(currentPage, totalPages, 999);
+        paginatorBar = `<div class="paginator-bar">
+            <button class="pg-btn pg-prev" data-page="prev" ${currentPage <= 0 ? 'disabled' : ''}>‹ 上一页</button>
+            <span class="pg-pages">${pgNums.map((p) => {
+              if (p === -1) return `<span class="pg-ellipsis">…</span>`;
+              const active = p === currentPage ? 'active' : '';
+              return `<button class="pg-btn pg-num ${active}" data-page="${p}">${p + 1}</button>`;
+            }).join('')}</span>
+            <button class="pg-btn pg-next" data-page="next" ${currentPage >= totalPages - 1 ? 'disabled' : ''}>下一页 ›</button>
+        </div>`;
+      }
     }
 
     return `
@@ -163,8 +253,10 @@ export function render(vscode: VsCodeApi) {
         <button id="translate-settings" class="icon-btn" title="翻译设置">⚙</button>
       </div>
       <div class="main">${main}</div>
+      ${paginatorBar}
       <div id="overlay" class="overlay hidden">
         <button id="overlay-close" class="overlay-close" title="关闭 (Esc)">✕</button>
+        <button id="overlay-download" class="overlay-download" title="下载原图">⬇</button>
         <img id="overlay-img" referrerpolicy="no-referrer" alt="" />
         <video id="overlay-video" autoplay loop controls muted playsinline referrerpolicy="no-referrer"></video>
         <div id="overlay-loading" class="overlay-loading">⏳ 加载中…</div>
@@ -188,7 +280,10 @@ export function render(vscode: VsCodeApi) {
     const thumb = imgUrl(threadBoard!, p, true);
     const full = imgUrl(threadBoard!, p, false);
     const img = thumb
-      ? `<img class="post-img" loading="lazy" src="${thumb}" data-full="${full ?? ''}" referrerpolicy="no-referrer" alt="" />`
+      ? `<div class="post-img-wrap">
+          <img class="post-img" loading="lazy" src="${thumb}" data-full="${full ?? ''}" referrerpolicy="no-referrer" alt="" />
+          <button class="post-img-dl" data-src="${full ?? ''}" title="下载原图">⬇</button>
+        </div>`
       : '';
     const name = p.name || 'Anonymous';
     const com = p.com ? sanitizeCom(p.com) : '';
@@ -234,6 +329,7 @@ export function render(vscode: VsCodeApi) {
     document.getElementById('refresh')?.addEventListener('click', () => {
       if (state.currentBoard) {
         pages = [];
+        currentPage = 0;
         catalogLoading = true;
         paint();
         send({ type: 'catalog', board: state.currentBoard });
@@ -256,12 +352,14 @@ export function render(vscode: VsCodeApi) {
           if (next) {
             state.currentBoard = next.board;
             pages = [];
+            currentPage = 0;
             catalogLoading = true;
             persist();
             send({ type: 'catalog', board: state.currentBoard });
           } else {
             state.currentBoard = undefined;
             pages = [];
+            currentPage = 0;
           }
         }
       }
@@ -308,6 +406,16 @@ export function render(vscode: VsCodeApi) {
       });
     });
 
+    // 分页器（上一页/下一页/数字按钮）
+    document.querySelectorAll<HTMLElement>('.pg-btn').forEach((el) => {
+      el.addEventListener('click', () => {
+        const page = el.dataset.page;
+        if (page === 'prev') gotoPage(Math.max(0, currentPage - 1));
+        else if (page === 'next') gotoPage(Math.min(pages.length - 1, currentPage + 1));
+        else gotoPage(Number(page) || 0);
+      });
+    });
+
     document.querySelectorAll<HTMLElement>('.post-img').forEach((el) => {
       el.addEventListener('click', () => {
         const src = el.dataset.full;
@@ -315,9 +423,25 @@ export function render(vscode: VsCodeApi) {
       });
     });
 
+    document.querySelectorAll<HTMLElement>('.post-img-dl').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const src = el.dataset.src;
+        if (src) {
+          ovOrigSrc = src;
+          void downloadCurrentMedia();
+        }
+      });
+    });
+
     document.getElementById('overlay-close')?.addEventListener('click', (e) => {
       e.stopPropagation();
       ovClose();
+    });
+
+    document.getElementById('overlay-download')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadCurrentMedia();
     });
 
     document.getElementById('nsfw-ok')?.addEventListener('click', () => {
@@ -443,14 +567,25 @@ export function render(vscode: VsCodeApi) {
     ovLoading(true);
     send({ type: 'img', url });
   };
+  let ovOrigSrc = ''; // 当前查看器的原始 URL（用于原图下载）
   const ovOpen = (src: string) => {
     const overlay = document.getElementById('overlay');
     if (!overlay) return;
     ovErr('');
     pendingKey = src;
+    ovOrigSrc = src;
     ovReset();
     overlay.classList.remove('hidden');
     showMedia(src, mediaOf(src)); // 优先直连加载，被防盗链拦截时自动降级
+  };
+
+  // 下载原图：交给宿主（Node 环境）fetch + 保存对话框
+  const downloadCurrentMedia = () => {
+    const src = ovOrigSrc;
+    if (!src) return;
+    const ext = (src.split('.').pop() || 'jpg').split('?')[0];
+    const filename = `${state.currentBoard ?? '4chan'}_${Date.now()}.${ext}`;
+    send({ type: 'downloadFile', url: src, filename });
   };
 
   // ESC 关闭（图片预览 / 成人确认框）
@@ -498,6 +633,7 @@ export function render(vscode: VsCodeApi) {
       case 'catalog':
         if (m.board !== state.currentBoard) break; // 过期响应（快速切换板块时）直接忽略，避免串板块
         pages = m.pages as CatalogPage[];
+        currentPage = 0;
         catalogLoading = false;
         state.view = 'catalog';
         persist();
@@ -556,6 +692,14 @@ export function render(vscode: VsCodeApi) {
       }
     }
   });
+
+  // 侧边栏宽度变化时，按新宽度重排分页器（响应式）
+  let resizeTimer = 0;
+  const ro = new ResizeObserver(() => {
+    window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(fitPaginator, 80);
+  });
+  ro.observe(app);
 
   send({ type: 'init' });
   paint();

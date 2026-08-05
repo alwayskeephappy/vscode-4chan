@@ -14,6 +14,14 @@ const secretKey = (p: Provider) => `${CONFIG_NS}.key.${p}`;
 const IMG_CACHE = new Map<string, { t: number; data: string }>();
 const IMG_CACHE_TTL = 30 * 60_000;
 const IMG_CACHE_MAX = 40;
+function urlBasename(url: string): string {
+  try {
+    const p = new URL(url).pathname;
+    return p.split('/').pop() || 'download';
+  } catch {
+    return (url.split('/').pop() || 'download').split('?')[0];
+  }
+}
 async function fetchImgBase64(url: string): Promise<string> {
   const hit = IMG_CACHE.get(url);
   if (hit && Date.now() - hit.t < IMG_CACHE_TTL) return hit.data;
@@ -43,7 +51,8 @@ type InMsg =
   | { type: 'openExternal'; url: string }
   | { type: 'translate'; posts: { no: number; text: string }[] }
   | { type: 'openTranslateMenu' }
-  | { type: 'img'; url: string };
+  | { type: 'img'; url: string }
+  | { type: 'downloadFile'; url: string; filename?: string };
 
 // Host → Webview
 type OutMsg =
@@ -123,6 +132,22 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
             await send({ type: 'imgError', url: msg.url, message });
           }
           break;
+        case 'downloadFile': {
+          try {
+            const res = await fetch(msg.url, {
+              headers: { 'User-Agent': 'vscode-4chan/0.1 (+developer tool)' },
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const buf = Buffer.from(await res.arrayBuffer());
+            const fn = msg.filename || urlBasename(msg.url);
+            const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(fn) });
+            if (uri) await vscode.workspace.fs.writeFile(uri, buf);
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            await vscode.window.showErrorMessage(`下载失败: ${message}`);
+          }
+          break;
+        }
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -230,6 +255,7 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
       `default-src 'none'`,
       `img-src ${webview.cspSource} https://i.4cdn.org https://s.4cdn.org https://a.4cdn.org data:`,
       `media-src ${webview.cspSource} https://i.4cdn.org data:`,
+      `connect-src https://i.4cdn.org https://a.4cdn.org data:`,
       `script-src 'nonce-${nonce}'`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `font-src ${webview.cspSource}`,

@@ -1,8 +1,8 @@
 {
   "name": "vscode-4chan",
   "displayName": "4chan 浏览器",
-  "description": "在 VSCode 侧边栏浏览 4chan（只读，摸鱼专用），含免费/AI 帖子翻译。An unofficial read-only 4chan browser extension for VS Code",
-  "version": "0.0.4",
+  "description": "在 VSCode 侧边栏浏览 4chan（只读），含免费/AI 帖子翻译",
+  "version": "1.0.0",
   "publisher": "yhf",
   "engines": {
     "vscode": "^1.80.0"

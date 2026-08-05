@@ -1,0 +1,76 @@
+{
+  "name": "vscode-4chan",
+  "displayName": "4chan 浏览器",
+  "description": "在 VSCode 侧边栏像刷知乎/TouchFish 一样浏览 4chan（只读，摸鱼专用），含免费/AI 帖子翻译。",
+  "version": "0.0.3",
+  "publisher": "yhf",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "4chan-container", "title": "4chan 浏览器", "icon": "media/icon.svg" }
+      ]
+    },
+    "views": {
+      "4chan-container": [
+        { "type": "webview", "id": "4chan.browser", "name": "4chan", "icon": "media/icon.svg" }
+      ]
+    },
+    "commands": [
+      { "command": "4chan.openBrowser", "title": "4chan: 打开浏览器" },
+      { "command": "4chan.translate.menu", "title": "4chan: 翻译设置" },
+      { "command": "4chan.translate.setApiKey", "title": "4chan: 设置翻译 API Key" }
+    ],
+    "keybindings": [
+      { "command": "4chan.openBrowser", "key": "ctrl+shift+alt+4", "mac": "cmd+shift+alt+4" }
+    ],
+    "configuration": {
+      "title": "4chan 翻译",
+      "properties": {
+        "vscode-4chan.translate.provider": {
+          "type": "string",
+          "enum": ["free-google", "free-mymemory", "openai", "deepseek", "glm", "anthropic", "gemini", "custom"],
+          "enumDescriptions": [
+            "Google 翻译（免费·非官方）",
+            "MyMemory（免费·有额度）",
+            "OpenAI",
+            "DeepSeek",
+            "智谱 GLM",
+            "Anthropic Claude",
+            "Google Gemini",
+            "自定义（OpenAI 兼容）"
+          ],
+          "default": "free-google",
+          "markdownDescription": "选择翻译提供商。AI 类需先配好 API Key（命令面板运行 `4chan: 设置翻译 API Key`）。"
+        },
+        "vscode-4chan.translate.aiModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "AI 模型 ID（留空使用默认，如 `gpt-4o-mini` / `deepseek-chat` / `gemini-2.0-flash`）。"
+        },
+        "vscode-4chan.translate.aiBaseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "自定义 BaseUrl（仅 `custom` 模式必填；其余留空用内置默认）。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.config.mjs --production",
+    "watch": "node esbuild.config.mjs --watch",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.80.0",
+    "esbuild": "^0.20.2",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}

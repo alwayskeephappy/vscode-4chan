@@ -1,0 +1,267 @@
+:root {
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: var(--vscode-sideBar-background);
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-font-family), system-ui, sans-serif;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* topbar */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-sideBarSectionHeader-background);
+}
+.topbar select {
+  flex: 1;
+  min-width: 0;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 3px 6px;
+  border-radius: 2px;
+  outline: none;
+}
+.topbar select:focus {
+  border-color: var(--vscode-focusBorder);
+}
+.icon-btn {
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: none;
+  padding: 2px 6px;
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 14px;
+  opacity: 0.8;
+}
+.icon-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+  opacity: 1;
+}
+.icon-btn.on {
+  color: #f5a623;
+  opacity: 1;
+}
+.sfw {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+/* main */
+.main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+/* catalog */
+.catalog {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+}
+.card {
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.card:hover {
+  border-color: var(--vscode-focusBorder);
+}
+.card img {
+  width: 100%;
+  height: 90px;
+  object-fit: cover;
+  display: block;
+  background: #000;
+}
+.card .no-img {
+  height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.35;
+}
+.card-meta {
+  padding: 4px 6px;
+}
+.card-title {
+  font-size: 11px;
+  line-height: 1.3;
+  max-height: 42px;
+  overflow: hidden;
+}
+.card-stat {
+  margin-top: 3px;
+  opacity: 0.55;
+  font-size: 10px;
+}
+
+/* thread */
+.thread-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.thread-back button {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border: none;
+  padding: 3px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.thread-title {
+  opacity: 0.6;
+}
+.post {
+  display: flex;
+  gap: 8px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.post-img {
+  width: 90px;
+  height: 90px;
+  object-fit: cover;
+  cursor: zoom-in;
+  border-radius: 3px;
+  background: #000;
+  flex-shrink: 0;
+}
+.post-body {
+  flex: 1;
+  min-width: 0;
+}
+.post-head {
+  font-size: 10px;
+  opacity: 0.65;
+  margin-bottom: 3px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.post-name {
+  color: var(--vscode-terminal-ansiGreen);
+  font-weight: 600;
+}
+.post-com {
+  line-height: 1.5;
+  word-break: break-word;
+  font-size: 12px;
+}
+.post-com .quote {
+  color: var(--vscode-terminal-ansiGreen);
+}
+.post-com a {
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.post-actions {
+  margin-left: auto;
+}
+.t-btn,
+.t-all {
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.t-btn:hover,
+.t-all:hover {
+  border-color: var(--vscode-focusBorder);
+}
+.t-btn.busy {
+  opacity: 0.5;
+  cursor: progress;
+}
+.t-all:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+.post-zh {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--vscode-textLink-foreground);
+  background: var(--vscode-textBlockQuote-background, rgba(120, 120, 120, 0.12));
+  color: var(--vscode-foreground);
+  border-radius: 0 3px 3px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* overlay */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  cursor: zoom-out;
+}
+.overlay.hidden {
+  display: none;
+}
+.overlay img {
+  max-width: 94%;
+  max-height: 94%;
+  object-fit: contain;
+}
+
+/* 被引用楼的高亮动画 */
+@keyframes flashPost {
+  0% {
+    background: var(--vscode-list-activeSelectionBackground);
+  }
+  100% {
+    background: transparent;
+  }
+}
+.post.flash {
+  animation: flashPost 1.4s ease-out;
+  border-radius: 4px;
+}
+
+/* misc */
+.empty {
+  padding: 24px 8px;
+  text-align: center;
+  opacity: 0.5;
+}
+.err {
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  background: rgba(255, 80, 80, 0.15);
+  border: 1px solid rgba(255, 80, 80, 0.5);
+  border-radius: 4px;
+}

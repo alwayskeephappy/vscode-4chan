@@ -16,6 +16,8 @@ export interface ProviderMeta {
   kind: AdapterKind;
   baseUrl: string;
   model: string;
+  /** 官方可选模型列表（高级设置下拉选择用）；缺省则只允许 model 这一个 */
+  models?: string[];
   needsKey: boolean;
   /** 获取 API Key 的外部链接 */
   keyLink?: string;
@@ -28,7 +30,8 @@ export const PROVIDERS: Record<Provider, ProviderMeta> = {
     label: 'DeepSeek',
     kind: 'openai',
     baseUrl: 'https://api.deepseek.com/v1',
-    model: 'deepseek-chat',
+    model: 'deepseek-v4-flash',
+    models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
     needsKey: true,
     keyLink: 'https://platform.deepseek.com/api_keys',
   },
@@ -37,6 +40,7 @@ export const PROVIDERS: Record<Provider, ProviderMeta> = {
     kind: 'openai',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     model: 'glm-4-flash',
+    models: ['glm-4-flash', 'glm-4-flash-250414', 'glm-4.7-flash', 'glm-4.5-air', 'glm-4.5-airx', 'glm-4.7-flashx', 'glm-4.6', 'glm-4.7', 'glm-4-long', 'glm-5-turbo', 'glm-5', 'glm-5.1', 'glm-5.2'],
     needsKey: true,
     keyLink: 'https://open.bigmodel.cn/usercenter/apikeys',
   },
@@ -45,6 +49,7 @@ export const PROVIDERS: Record<Provider, ProviderMeta> = {
     kind: 'openai',
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
+    models: ['gpt-4o-mini', 'gpt-5-nano', 'gpt-5.4-nano', 'gpt-4.1-mini', 'gpt-5-mini', 'gpt-4o', 'gpt-4.1', 'gpt-5', 'gpt-5.1', 'gpt-5.2', 'gpt-5.4', 'gpt-5.5', 'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'],
     needsKey: true,
     keyLink: 'https://platform.openai.com/api-keys',
   },
@@ -53,6 +58,7 @@ export const PROVIDERS: Record<Provider, ProviderMeta> = {
     kind: 'openai',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     model: 'qwen-turbo',
+    models: ['qwen-turbo', 'qwen-flash', 'qwen3.7-flash', 'qwen-plus', 'qwen3.7-plus', 'qwen-long', 'qwen-max', 'qwen3-max', 'qwen3.8-max'],
     needsKey: true,
     keyLink: 'https://dashscope.console.aliyun.com/apiKey',
   },

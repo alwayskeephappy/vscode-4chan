@@ -37,6 +37,7 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private store: Store,
     private secrets: vscode.SecretStorage,
+    private globalState: vscode.Memento,
   ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
@@ -119,7 +120,8 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
     const provider = (this.cfg().get<Provider>('provider') ?? 'free-google') as Provider;
     const meta = PROVIDERS[provider];
     const apiKey = meta.needsKey ? (await this.secrets.get(secretKey(provider))) ?? '' : '';
-    return { provider, baseUrl: meta.baseUrl, model: meta.model, apiKey };
+    const model = this.globalState.get<string>(`model.${provider}`) || meta.model;
+    return { provider, baseUrl: meta.baseUrl, model, apiKey };
   }
 
   // 可选引擎 = 免费(Google/MyMemory) + 已配置 Key 的 AI
@@ -149,15 +151,26 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
   private async chooseEngine() {
     const avail = await this.availableEngines();
     const current = (this.cfg().get<Provider>('provider') ?? 'free-google') as Provider;
-    const items = avail.map((id) => ({
-      label: PROVIDERS[id].label,
-      id,
-      picked: id === current,
-      description: PROVIDERS[id].needsKey ? 'AI' : '免费',
-    }));
-    const chosen = await vscode.window.showQuickPick(items, {
-      placeHolder: '选择翻译引擎（仅显示已配置的 AI）',
+    const items = avail.map((id) => {
+      const isCurrent = id === current;
+      return {
+        label: (isCurrent ? '$(check)  ' : '') + PROVIDERS[id].label,
+        id,
+        description: isCurrent ? '当前使用' : PROVIDERS[id].needsKey ? 'AI' : '免费',
+      };
     });
+    // 用 createQuickPick 才能把焦点定位到当前引擎，避免默认聚焦首项 Google 造成误判
+    const qp = vscode.window.createQuickPick();
+    qp.items = items;
+    qp.placeholder = '选择翻译引擎（仅显示已配置的 AI）';
+    const currentIdx = avail.indexOf(current);
+    const chosen = await new Promise<typeof items[number] | undefined>((resolve) => {
+      if (currentIdx >= 0) qp.activeItems = [items[currentIdx]];
+      qp.onDidAccept(() => resolve(qp.activeItems[0] as typeof items[number] | undefined));
+      qp.onDidHide(() => resolve(undefined));
+      qp.show();
+    });
+    qp.dispose();
     if (!chosen) return;
     const p = chosen.id as Provider;
     await this.cfg().update('provider', p, vscode.ConfigurationTarget.Global);
@@ -170,7 +183,7 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
 
   // 打开自定义高级设置面板（单列配置各 AI 引擎的 API Key）
   private async advancedSettings() {
-    await SettingsPanel.open(this.secrets);
+    await SettingsPanel.open(this.secrets, this.globalState);
   }
 
   private getHtml(webview: vscode.Webview): string {
@@ -211,7 +224,7 @@ function getNonce(): string {
 
 export function activate(context: vscode.ExtensionContext) {
   const store = new Store(context.globalState);
-  const provider = new FourChanViewProvider(context.extensionUri, store, context.secrets);
+  const provider = new FourChanViewProvider(context.extensionUri, store, context.secrets, context.globalState);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {

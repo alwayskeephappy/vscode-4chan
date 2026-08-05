@@ -3,6 +3,7 @@ import { PROVIDERS, type Provider } from './translate';
 
 const CONFIG_NS = 'vscode-4chan.translate';
 const secretKey = (p: Provider) => `${CONFIG_NS}.key.${p}`;
+const modelKey = (p: Provider) => `model.${p}`;
 // 面板里展示的 AI 引擎（固定 4 个）
 const AI_PROVIDERS: Provider[] = ['deepseek', 'glm', 'openai', 'qwen'];
 
@@ -10,22 +11,25 @@ interface ItemState {
   provider: Provider;
   label: string;
   configured: boolean;
+  models?: string[];
+  model: string;
   link?: string;
 }
 
 type PanelMsg =
   | { type: 'save'; provider: Provider; key: string }
   | { type: 'clear'; provider: Provider }
+  | { type: 'setModel'; provider: Provider; model: string }
   | { type: 'openLink'; url: string };
 
 /**
- * 高级设置 Webview 面板：单列展示各 AI 引擎，逐行配置 API Key。
- * Key 只存 SecretStorage，不下发明文、不在面板回显。
+ * 高级设置 Webview 面板：单列展示各 AI 引擎，逐行配置 API Key + 选择模型。
+ * Key 只存 SecretStorage，不下发明文、不在面板回显（已配置时仅以密文占位提示）。
  */
 export class SettingsPanel {
   private static current?: vscode.WebviewPanel;
 
-  static async open(secrets: vscode.SecretStorage) {
+  static async open(secrets: vscode.SecretStorage, globalState: vscode.Memento) {
     if (SettingsPanel.current) {
       SettingsPanel.current.reveal(vscode.ViewColumn.Active);
       return;
@@ -40,7 +44,7 @@ export class SettingsPanel {
     panel.webview.html = SettingsPanel.html();
 
     const send = (m: unknown) => panel.webview.postMessage(m);
-    send({ type: 'init', items: await SettingsPanel.readItems(secrets) });
+    send({ type: 'init', items: await SettingsPanel.readItems(secrets, globalState) });
 
     panel.webview.onDidReceiveMessage(async (m: PanelMsg) => {
       switch (m.type) {
@@ -55,6 +59,9 @@ export class SettingsPanel {
           await secrets.delete(secretKey(m.provider));
           send({ type: 'updated', provider: m.provider, configured: false });
           break;
+        case 'setModel':
+          await globalState.update(modelKey(m.provider), m.model);
+          break;
         case 'openLink':
           if (m.url) await vscode.env.openExternal(vscode.Uri.parse(m.url));
           break;
@@ -66,14 +73,20 @@ export class SettingsPanel {
     });
   }
 
-  private static async readItems(secrets: vscode.SecretStorage): Promise<ItemState[]> {
+  private static async readItems(
+    secrets: vscode.SecretStorage,
+    globalState: vscode.Memento,
+  ): Promise<ItemState[]> {
     const items: ItemState[] = [];
     for (const p of AI_PROVIDERS) {
       const meta = PROVIDERS[p];
+      const saved = globalState.get<string>(modelKey(p));
       items.push({
         provider: p,
         label: meta.label,
         configured: !!(await secrets.get(secretKey(p))),
+        models: meta.models,
+        model: saved || meta.model,
         link: meta.keyLink,
       });
     }
@@ -120,6 +133,15 @@ export class SettingsPanel {
   .status.on { color: var(--vscode-testing-iconPassed, #3fb950); }
   .status.off { color: var(--vscode-descriptionForeground); }
   .controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  select.model {
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, transparent);
+    padding: 6px 4px; border-radius: 2px;
+    font-size: 12px; font-family: var(--vscode-editor-font-family, monospace);
+    outline: none; max-width: 150px;
+  }
+  select.model:focus { border-color: var(--vscode-focusBorder); }
   input.key {
     flex: 1; min-width: 120px;
     background: var(--vscode-input-background);
@@ -131,6 +153,7 @@ export class SettingsPanel {
   }
   input.key:focus { border-color: var(--vscode-focusBorder); }
   input.key::placeholder { color: var(--vscode-input-placeholderForeground); }
+  input.key[readonly] { opacity: 0.85; cursor: default; }
   button {
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
@@ -154,8 +177,8 @@ export class SettingsPanel {
 </style>
 </head>
 <body>
-  <h2>AI 翻译引擎 · API Key</h2>
-  <div class="hint">为要启用的引擎填入 API Key，保存后即出现在「选择翻译引擎」中。密钥安全存储于系统密钥库，不写入文件、不回显。</div>
+  <h2>AI 翻译引擎 · API Key 与模型</h2>
+  <div class="hint">为要启用的引擎填入 API Key（密文存储，不回显），并在下拉中选择官方模型。保存后该引擎即出现在「选择翻译引擎」中。</div>
   <div id="list"></div>
   <div class="toast" id="toast"></div>
   <script nonce="${nonce}">
@@ -173,14 +196,32 @@ export class SettingsPanel {
       list.innerHTML = items.map(function (it) {
         var sc = it.configured ? 'on' : 'off';
         var st = it.configured ? '● 已配置' : '○ 未配置';
+        var modelField = '';
+        if (it.models && it.models.length) {
+          var inList = it.models.indexOf(it.model) !== -1;
+          var opts = it.models.map(function (m) {
+            return '<option value="' + m + '"' + (inList && m === it.model ? ' selected' : '') + '>' + m + '</option>';
+          }).join('');
+          // 当前模型不在官方列表（自定义/旧值）时追加一项，保证可见可选
+          if (!inList) opts = '<option value="' + it.model + '" selected>' + it.model + '</option>' + opts;
+          modelField = '<select class="model" title="选择模型">' + opts + '</select>';
+        } else {
+          modelField = '<input class="model" value="' + it.model + '" title="模型" />';
+        }
+        var inputAttrs = it.configured
+          ? 'type="password" placeholder="密钥已配置（密文存储）" readonly'
+          : 'type="password" placeholder="填入 API Key"';
+        // 保存按钮默认隐藏：仅当用户在输入框中填入内容时才出现
+        var saveBtn = '<button class="save" style="display:none">保存</button>';
         var clearBtn = it.configured ? '<button class="clear">清除</button>' : '';
         var linkBtn = it.link ? '<a class="getlink" data-link="' + it.link + '">获取 Key ↗</a>' : '';
         return '<div class="row" data-provider="' + it.provider + '">' +
           '<div><div class="name">' + it.label + '</div>' +
           '<div class="status ' + sc + '">' + st + '</div></div>' +
           '<div class="controls">' +
-          '<input class="key" type="password" placeholder="填入 API Key" />' +
-          '<button class="save">保存</button>' + clearBtn + linkBtn +
+          modelField +
+          '<input class="key" ' + inputAttrs + ' />' +
+          saveBtn + clearBtn + linkBtn +
           '</div></div>';
       }).join('');
       bind();
@@ -192,19 +233,31 @@ export class SettingsPanel {
       var stEl = row.querySelector('.status');
       stEl.className = 'status ' + (configured ? 'on' : 'off');
       stEl.textContent = configured ? '● 已配置' : '○ 未配置';
+      var input = row.querySelector('.key');
+      var saveBtn = row.querySelector('.save');
       var controls = row.querySelector('.controls');
-      var clearBtn = controls.querySelector('.clear');
-      if (configured && !clearBtn) {
-        clearBtn = document.createElement('button');
-        clearBtn.className = 'clear';
-        clearBtn.textContent = '清除';
-        controls.querySelector('.save').after(clearBtn);
-        clearBtn.addEventListener('click', function () {
-          vscode.postMessage({ type: 'clear', provider: provider });
-          showToast('已清除');
-        });
-      } else if (!configured && clearBtn) {
-        clearBtn.remove();
+      if (configured) {
+        input.value = '';
+        input.placeholder = '密钥已配置（密文存储）';
+        input.readOnly = true;
+        saveBtn.style.display = 'none';
+        var clearBtn = controls.querySelector('.clear');
+        if (!clearBtn) {
+          clearBtn = document.createElement('button');
+          clearBtn.className = 'clear';
+          clearBtn.textContent = '清除';
+          saveBtn.after(clearBtn);
+          clearBtn.addEventListener('click', function () {
+            vscode.postMessage({ type: 'clear', provider: provider });
+            showToast('已清除');
+          });
+        }
+      } else {
+        input.placeholder = '填入 API Key';
+        input.readOnly = false;
+        saveBtn.style.display = 'none';
+        var clearBtn = controls.querySelector('.clear');
+        if (clearBtn) clearBtn.remove();
       }
     }
 
@@ -219,17 +272,26 @@ export class SettingsPanel {
           input.value = '';
           showToast('已保存');
         });
+        // 输入内容时才显示保存按钮；清空则隐藏
+        input.addEventListener('input', function () {
+          saveBtn.style.display = input.value.trim() ? '' : 'none';
+        });
         var cb = row.querySelector('.clear');
         if (cb) cb.addEventListener('click', function () {
           vscode.postMessage({ type: 'clear', provider: provider });
           showToast('已清除');
+        });
+        var sel = row.querySelector('select.model');
+        if (sel) sel.addEventListener('change', function () {
+          vscode.postMessage({ type: 'setModel', provider: provider, model: sel.value });
+          showToast('模型已切换为 ' + sel.value);
         });
         var lk = row.querySelector('.getlink');
         if (lk) lk.addEventListener('click', function () {
           vscode.postMessage({ type: 'openLink', url: lk.dataset.link });
         });
         input.addEventListener('keydown', function (e) {
-          if (e.key === 'Enter') saveBtn.click();
+          if (e.key === 'Enter' && saveBtn.style.display !== 'none') saveBtn.click();
         });
       });
     }

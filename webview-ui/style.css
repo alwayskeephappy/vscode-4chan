@@ -51,7 +51,7 @@ body {
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   border: 1px solid var(--vscode-input-border, transparent);
-  padding: 3px 6px;
+  padding: 3px 24px 3px 6px;
   border-radius: 2px;
   outline: none;
 }

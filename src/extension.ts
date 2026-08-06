@@ -3,6 +3,7 @@ import { getBoards, getCatalog, getThread } from './api';
 import { Store } from './store';
 import { PROVIDERS, translate, type Provider, type TranslateConfig } from './translate';
 import { SettingsPanel } from './settings-panel';
+import { mediaBasename, mediaContentType } from './media';
 import type { Board, CatalogPage, Post } from './types';
 
 const VIEW_ID = '4chan.browser';
@@ -14,14 +15,6 @@ const secretKey = (p: Provider) => `${CONFIG_NS}.key.${p}`;
 const IMG_CACHE = new Map<string, { t: number; data: string }>();
 const IMG_CACHE_TTL = 30 * 60_000;
 const IMG_CACHE_MAX = 40;
-function urlBasename(url: string): string {
-  try {
-    const p = new URL(url).pathname;
-    return p.split('/').pop() || 'download';
-  } catch {
-    return (url.split('/').pop() || 'download').split('?')[0];
-  }
-}
 async function fetchImgBase64(url: string): Promise<string> {
   const hit = IMG_CACHE.get(url);
   if (hit && Date.now() - hit.t < IMG_CACHE_TTL) return hit.data;
@@ -30,7 +23,9 @@ async function fetchImgBase64(url: string): Promise<string> {
     redirect: 'follow',
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const ct = res.headers.get('content-type') || 'application/octet-stream';
+  // Some CDNs/proxies return a generic or incorrect type (occasionally application/wasm).
+  // The 4chan attachment extension is authoritative and lets Chromium select its decoder.
+  const ct = mediaContentType(url, res.headers.get('content-type'));
   const buf = Buffer.from(await res.arrayBuffer());
   const data = `data:${ct};base64,${buf.toString('base64')}`;
   IMG_CACHE.set(url, { t: Date.now(), data });
@@ -139,7 +134,7 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const buf = Buffer.from(await res.arrayBuffer());
-            const fn = msg.filename || urlBasename(msg.url);
+            const fn = msg.filename || mediaBasename(msg.url);
             const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(fn) });
             if (uri) await vscode.workspace.fs.writeFile(uri, buf);
           } catch (e) {

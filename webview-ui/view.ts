@@ -596,7 +596,7 @@ export function render(vscode: VsCodeApi) {
     ovLoading(false);
     pendingKey = '';
   };
-  const mediaOf = (url: string): 'video' | 'image' => (/\.(webm|mp4)$/i.test(url) ? 'video' : 'image');
+  const mediaOf = (url: string): 'video' | 'image' => (/\.(webm|mp4)(?:[?#]|$)/i.test(url) ? 'video' : 'image');
   const showMedia = (uri: string, media: 'video' | 'image') => {
     const img = document.getElementById('overlay-img') as HTMLImageElement | null;
     const vid = document.getElementById('overlay-video') as HTMLVideoElement | null;
@@ -647,7 +647,7 @@ export function render(vscode: VsCodeApi) {
   const downloadCurrentMedia = () => {
     const src = ovOrigSrc;
     if (!src) return;
-    const ext = (src.split('.').pop() || 'jpg').split('?')[0];
+    const ext = src.match(/\.([a-z0-9]+)(?:[?#]|$)/i)?.[1].toLowerCase() || 'jpg';
     const filename = `${state.currentBoard ?? '4chan'}_${Date.now()}.${ext}`;
     send({ type: 'downloadFile', url: src, filename });
   };

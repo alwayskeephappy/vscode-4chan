@@ -42,6 +42,7 @@ export function render(vscode: VsCodeApi) {
   let catalogLoading = false; // 板块 catalog 请求进行中，用于显示加载占位
   let posts: Post[] = [];
   let threadBoard = state.currentBoard;
+  let hideThreadImages = false; // 摸鱼模式：一键隐藏当前帖子的所有图片
 
   const send = (m: unknown) => vscode.postMessage(m);
   const persist = () => vscode.setState(state);
@@ -252,6 +253,7 @@ export function render(vscode: VsCodeApi) {
           <button id="back">← 返回</button>
           <div>
               <span class="thread-title">#${state.currentThread}</span>
+              <button id="toggle-images" class="t-all">${hideThreadImages ? '显示图片' : '隐藏图片'}</button>
               <button id="translate-all" class="t-all" ${translatingAll ? 'disabled' : ''}>${translatingAll ? '翻译中…' : '翻译全部'}</button>
           </div>
         </div>` +
@@ -336,7 +338,7 @@ export function render(vscode: VsCodeApi) {
   function postHtml(p: Post): string {
     const thumb = imgUrl(threadBoard!, p, true);
     const full = imgUrl(threadBoard!, p, false);
-    const img = thumb
+    const img = !hideThreadImages && thumb
       ? `<div class="post-img-wrap">
           <img class="post-img" loading="lazy" src="${thumb}" data-full="${full ?? ''}" referrerpolicy="no-referrer" alt="" />
           <button class="post-img-dl" data-src="${full ?? ''}" title="下载原图">⬇</button>
@@ -427,6 +429,11 @@ export function render(vscode: VsCodeApi) {
       state.view = 'catalog';
       persist();
       paint();
+    });
+
+    document.getElementById('toggle-images')?.addEventListener('click', () => {
+      hideThreadImages = !hideThreadImages;
+      paint(true);
     });
 
     document.getElementById('translate-all')?.addEventListener('click', () => {
@@ -705,6 +712,7 @@ export function render(vscode: VsCodeApi) {
         threadBoard = t.board;
         posts = t.posts;
         translatingAll = false;
+        hideThreadImages = false;
         paint();
         break;
       }

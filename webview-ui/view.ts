@@ -34,7 +34,11 @@ export function render(vscode: VsCodeApi) {
   const state: State = saved ?? { boards: [], favorites: [], sfwOnly: true, view: 'catalog' };
 
   let pages: CatalogPage[] = [];
-  let currentPage = 0; // 当前 catalog 页码（0 起始）
+  let currentPage = 0; // 当前动态分页页码（0 起始）
+  let catalogPageSize = 1; // 由当前可视区域的列数 × 行数实时计算
+  let catalogColumns = 1;
+  let catalogRows = 1;
+  let catalogCardSize = 100;
   let catalogLoading = false; // 板块 catalog 请求进行中，用于显示加载占位
   let posts: Post[] = [];
   let threadBoard = state.currentBoard;
@@ -56,6 +60,14 @@ export function render(vscode: VsCodeApi) {
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
     return (tpl.content.textContent || '').trim();
+  }
+
+  function catalogThreads() {
+    return pages.flatMap((page) => page.threads);
+  }
+
+  function catalogPageCount() {
+    return Math.max(1, Math.ceil(catalogThreads().length / catalogPageSize));
   }
 
   // 构建分页器页码序列，-1 代表省略号。
@@ -90,7 +102,7 @@ export function render(vscode: VsCodeApi) {
   // 实测 .pg-pages 的可用宽度与单个按钮宽度，精确计算能容纳几个页码（绝不溢出）
   // 上限 9：宽面板不贪婪填满，收敛到合理数量居中显示，留出余白
   function fitPaginator() {
-    const total = pages.length;
+    const total = catalogPageCount();
     if (total <= 1) return;
     const container = document.querySelector<HTMLElement>('.pg-pages');
     if (!container) return;
@@ -99,10 +111,11 @@ export function render(vscode: VsCodeApi) {
     if (!sample) return; // 还没渲染出按钮，等下次
     const gap = 4;
     const slotW = sample.offsetWidth + gap;
-    // 能容纳的页码槽位数：下限 5（窄面板不挤）、上限 9（宽面板不贪婪填满）
     const measured = Math.floor((avail + gap) / slotW);
-    const maxFit = Math.max(5, Math.min(9, measured));
-    const nums = paginationRange(currentPage, total, maxFit);
+    // 中间区域过窄时只保留当前页，避免页码与上一页/下一页互相挤压。
+    const nums = measured < 5
+      ? [currentPage]
+      : paginationRange(currentPage, total, Math.min(9, measured));
     container.innerHTML = nums
       .map((p) => {
         if (p === -1) return `<span class="pg-ellipsis">…</span>`;
@@ -115,9 +128,44 @@ export function render(vscode: VsCodeApi) {
 
   // 翻页：更新页码并重渲染（fitPaginator 会按新宽度重排）
   function gotoPage(p: number) {
-    currentPage = p;
+    currentPage = Math.max(0, Math.min(p, catalogPageCount() - 1));
     paint();
     document.querySelector('.main')?.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Catalog 卡片保持正方形并铺满每行。根据实际宽高计算能完整放下的列数和行数，
+  // 然后将整个 4chan catalog 重新分页，而不使用 4chan 自带的页号。
+  function fitCatalogPage() {
+    if (state.view !== 'catalog' || catalogLoading || !pages.length) return;
+    const main = document.querySelector<HTMLElement>('.main');
+    if (!main) return;
+
+    const padding = 8;
+    const gap = 8;
+    const minCardWidth = 100;
+    const innerWidth = Math.max(1, main.clientWidth - padding * 2);
+    const innerHeight = Math.max(1, main.clientHeight - padding * 2);
+    const columns = Math.max(1, Math.floor((innerWidth + gap) / (minCardWidth + gap)));
+    const cardSize = (innerWidth - gap * (columns - 1)) / columns;
+    const rows = Math.max(1, Math.floor((innerHeight + gap) / (cardSize + gap)));
+    const nextPageSize = Math.max(1, columns * rows);
+    if (
+      nextPageSize === catalogPageSize
+      && columns === catalogColumns
+      && rows === catalogRows
+      && Math.abs(cardSize - catalogCardSize) < 0.5
+    ) return;
+
+    const firstVisibleItem = currentPage * catalogPageSize;
+    catalogPageSize = nextPageSize;
+    catalogColumns = columns;
+    catalogRows = rows;
+    catalogCardSize = cardSize;
+    currentPage = Math.min(
+      Math.floor(firstVisibleItem / catalogPageSize),
+      catalogPageCount() - 1,
+    );
+    paint();
   }
 
   // 仅绑定数字按钮（fitPaginator 重渲染 .pg-pages 后调用）
@@ -164,7 +212,8 @@ export function render(vscode: VsCodeApi) {
     const next = document.querySelector('.main');
     if (next) next.scrollTop = top;
     if (pendingNsfwBoard) showNsfwModal(pendingNsfwBoard); // 重建后保持确认框显示
-    // 渲染后按实测宽度精确排布分页器（恰好占满中间、绝不溢出）
+    // 渲染后按实际可视宽高重新计算容量，再按实测宽度排布页码。
+    window.requestAnimationFrame(fitCatalogPage);
     fitPaginator();
   }
 
@@ -208,9 +257,11 @@ export function render(vscode: VsCodeApi) {
         </div>` +
         `<div class="thread">${posts.map((p) => postHtml(p)).join('')}</div>`;
     } else {
-      // 分页：仅展示当前页的线程
-      const pg = pages[currentPage];
-      const threads = pg ? pg.threads : [];
+      // 将接口返回的全量活跃主题展平，再按当前可视区域容量动态分页。
+      const allThreads = catalogThreads();
+      const start = currentPage * catalogPageSize;
+      const threads = allThreads.slice(start, start + catalogPageSize);
+      const fillsPage = threads.length === catalogPageSize;
       const cards = threads
         .map((t) => {
           const thumb = imgUrl(state.currentBoard!, t, true);
@@ -225,10 +276,16 @@ export function render(vscode: VsCodeApi) {
           </div>`;
         })
         .join('');
-      main = `<div class="catalog">${
+      const catalogStyle = [
+        `--catalog-columns:${catalogColumns}`,
+        `--catalog-rows:${catalogRows}`,
+        `--catalog-leading-rows:${Math.max(0, catalogRows - 1)}`,
+        `--catalog-card-size:${catalogCardSize}px`,
+      ].join(';');
+      main = `<div class="catalog ${fillsPage ? 'fill-height' : ''}" style="${catalogStyle}">${
         cards || (catalogLoading ? '<div class="empty">加载中…</div>' : '<div class="empty">选择上方版块开始浏览</div>')
       }</div>`;
-      const totalPages = pages.length;
+      const totalPages = catalogPageCount();
       if (totalPages > 1) {
         // 初始用一个较大窗口渲染（fitPaginator 会在 paint 后按实测宽度精确裁剪）
         const pgNums = paginationRange(currentPage, totalPages, 999);
@@ -379,7 +436,7 @@ export function render(vscode: VsCodeApi) {
       if (!items.length) return;
       translatingAll = true;
       items.forEach((it) => translating.add(pkey(it.no)));
-      paint();
+      paint(true);
       send({ type: 'translate', posts: items });
     });
 
@@ -390,7 +447,7 @@ export function render(vscode: VsCodeApi) {
         const text = htmlToText(p?.com || '');
         if (!text) return;
         translating.add(pkey(no));
-        paint();
+        paint(true);
         send({ type: 'translate', posts: [{ no, text }] });
       });
     });
@@ -411,7 +468,7 @@ export function render(vscode: VsCodeApi) {
       el.addEventListener('click', () => {
         const page = el.dataset.page;
         if (page === 'prev') gotoPage(Math.max(0, currentPage - 1));
-        else if (page === 'next') gotoPage(Math.min(pages.length - 1, currentPage + 1));
+        else if (page === 'next') gotoPage(Math.min(catalogPageCount() - 1, currentPage + 1));
         else gotoPage(Number(page) || 0);
       });
     });
@@ -634,6 +691,10 @@ export function render(vscode: VsCodeApi) {
         if (m.board !== state.currentBoard) break; // 过期响应（快速切换板块时）直接忽略，避免串板块
         pages = m.pages as CatalogPage[];
         currentPage = 0;
+        catalogPageSize = 1;
+        catalogColumns = 1;
+        catalogRows = 1;
+        catalogCardSize = 100;
         catalogLoading = false;
         state.view = 'catalog';
         persist();
@@ -693,11 +754,14 @@ export function render(vscode: VsCodeApi) {
     }
   });
 
-  // 侧边栏宽度变化时，按新宽度重排分页器（响应式）
+  // 侧边栏宽高变化时，同时重算每页容量和页码布局。
   let resizeTimer = 0;
   const ro = new ResizeObserver(() => {
     window.clearTimeout(resizeTimer);
-    resizeTimer = window.setTimeout(fitPaginator, 80);
+    resizeTimer = window.setTimeout(() => {
+      fitCatalogPage();
+      fitPaginator();
+    }, 80);
   });
   ro.observe(app);
 

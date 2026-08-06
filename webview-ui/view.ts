@@ -204,9 +204,16 @@ export function render(vscode: VsCodeApi) {
     return tpl.innerHTML;
   }
 
+  /** NSFW 模式下允许显示的 NSFW 板块白名单 */
+  const NSFW_WHITELIST = ['gif', 'wg'];
+
   function filteredBoards(): { favs: Board[]; rest: Board[] } {
     let list = state.boards;
-    if (state.sfwOnly) list = list.filter((b) => b.ws_board === 1);
+    if (state.sfwOnly) {
+      list = list.filter((b) => b.ws_board === 1);
+    } else {
+      list = list.filter((b) => b.ws_board === 1 || NSFW_WHITELIST.includes(b.board));
+    }
     const sortByName = (a: Board, b: Board) => a.board.localeCompare(b.board);
     return {
       favs: list.filter((b) => state.favorites.includes(b.board)).sort(sortByName),

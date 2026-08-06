@@ -1,4 +1,9 @@
 import * as esbuild from 'esbuild';
+import { copyFile, mkdir } from 'node:fs/promises';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
@@ -45,6 +50,21 @@ async function buildAll() {
     esbuild.build(webviewOptions),
     esbuild.build(cssOptions),
   ]);
+  await Promise.all([
+    copyFile(path.join('webview-ui', 'jsmpeg.min.js'), path.join('dist', 'jsmpeg.min.js')),
+    copyFile(path.join('webview-ui', 'JSMPEG-LICENSE.txt'), path.join('dist', 'JSMPEG-LICENSE.txt')),
+  ]);
+  if (production) {
+    const ffmpegPath = require('ffmpeg-static');
+    const ffmpegPackageDir = path.dirname(require.resolve('ffmpeg-static/package.json'));
+    const targetDir = path.join('dist', 'ffmpeg');
+    await mkdir(targetDir, { recursive: true });
+    await Promise.all([
+      copyFile(ffmpegPath, path.join(targetDir, 'ffmpeg.exe')),
+      copyFile(path.join(ffmpegPackageDir, 'ffmpeg.exe.LICENSE'), path.join(targetDir, 'LICENSE.txt')),
+      copyFile(path.join(ffmpegPackageDir, 'ffmpeg.exe.README'), path.join(targetDir, 'README.txt')),
+    ]);
+  }
   console.log('build done');
 }
 

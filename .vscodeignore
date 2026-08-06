@@ -9,3 +9,5 @@ tsconfig.json
 vitest.config.ts
 **/*.map
 .gitignore
+.tmp-transcode/**
+debug.log

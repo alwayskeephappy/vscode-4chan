@@ -16,10 +16,18 @@ interface ItemState {
   link?: string;
 }
 
+interface CacheInfo {
+  path: string;
+  bytes: number;
+  files: number;
+  maxBytes: number;
+}
+
 type PanelMsg =
   | { type: 'save'; provider: Provider; key: string }
   | { type: 'clear'; provider: Provider }
   | { type: 'setModel'; provider: Provider; model: string }
+  | { type: 'clearCache' }
   | { type: 'openLink'; url: string };
 
 /**
@@ -29,9 +37,18 @@ type PanelMsg =
 export class SettingsPanel {
   private static current?: vscode.WebviewPanel;
 
-  static async open(secrets: vscode.SecretStorage, globalState: vscode.Memento) {
+  static async open(
+    secrets: vscode.SecretStorage,
+    globalState: vscode.Memento,
+    cacheUri: vscode.Uri,
+    maxCacheBytes: number,
+  ) {
     if (SettingsPanel.current) {
       SettingsPanel.current.reveal(vscode.ViewColumn.Active);
+      SettingsPanel.current.webview.postMessage({
+        type: 'cacheInfo',
+        cache: await SettingsPanel.readCacheInfo(cacheUri, maxCacheBytes),
+      });
       return;
     }
     const panel = vscode.window.createWebviewPanel(
@@ -44,7 +61,11 @@ export class SettingsPanel {
     panel.webview.html = SettingsPanel.html();
 
     const send = (m: unknown) => panel.webview.postMessage(m);
-    send({ type: 'init', items: await SettingsPanel.readItems(secrets, globalState) });
+    send({
+      type: 'init',
+      items: await SettingsPanel.readItems(secrets, globalState),
+      cache: await SettingsPanel.readCacheInfo(cacheUri, maxCacheBytes),
+    });
 
     panel.webview.onDidReceiveMessage(async (m: PanelMsg) => {
       switch (m.type) {
@@ -62,6 +83,33 @@ export class SettingsPanel {
         case 'setModel':
           await globalState.update(modelKey(m.provider), m.model);
           break;
+        case 'clearCache': {
+          const confirm = await vscode.window.showWarningMessage(
+            '确定要清理全部媒体缓存吗？',
+            {
+              modal: true,
+              detail: `将永久删除以下目录中的全部缓存文件：\n${cacheUri.fsPath}`,
+            },
+            '确认清理',
+          );
+          if (confirm !== '确认清理') break;
+          try {
+            try {
+              await vscode.workspace.fs.delete(cacheUri, { recursive: true, useTrash: false });
+            } catch (error) {
+              if (!(error instanceof vscode.FileSystemError && error.code === 'FileNotFound')) throw error;
+            }
+            await vscode.workspace.fs.createDirectory(cacheUri);
+            send({
+              type: 'cacheCleared',
+              cache: await SettingsPanel.readCacheInfo(cacheUri, maxCacheBytes),
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            send({ type: 'cacheError', message });
+          }
+          break;
+        }
         case 'openLink':
           if (m.url) await vscode.env.openExternal(vscode.Uri.parse(m.url));
           break;
@@ -91,6 +139,22 @@ export class SettingsPanel {
       });
     }
     return items;
+  }
+
+  private static async readCacheInfo(cacheUri: vscode.Uri, maxBytes: number): Promise<CacheInfo> {
+    let bytes = 0;
+    let files = 0;
+    try {
+      for (const [name, type] of await vscode.workspace.fs.readDirectory(cacheUri)) {
+        if (type !== vscode.FileType.File) continue;
+        const stat = await vscode.workspace.fs.stat(vscode.Uri.joinPath(cacheUri, name));
+        bytes += stat.size;
+        files += 1;
+      }
+    } catch {
+      // The cache directory is created lazily after the first media fallback.
+    }
+    return { path: cacheUri.fsPath, bytes, files, maxBytes };
   }
 
   private static nonce(): string {
@@ -134,12 +198,17 @@ export class SettingsPanel {
   .status.off { color: var(--vscode-descriptionForeground); }
   .controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
   select.model {
+    box-sizing: border-box;
+    flex: 0 0 150px;
+    width: 150px;
+    min-width: 150px;
+    max-width: 150px;
     background: var(--vscode-input-background);
     color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, transparent);
     padding: 6px 4px; border-radius: 2px;
     font-size: 12px; font-family: var(--vscode-editor-font-family, monospace);
-    outline: none; max-width: 150px;
+    outline: none;
   }
   select.model:focus { border-color: var(--vscode-focusBorder); }
   input.key {
@@ -174,22 +243,64 @@ export class SettingsPanel {
     opacity: 0; transition: opacity 0.2s; pointer-events: none;
   }
   .toast.show { opacity: 1; }
+  .cache-card {
+    margin-top: 18px; padding: 14px 16px;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3));
+    border-radius: 4px;
+    background: var(--vscode-sideBar-background, transparent);
+  }
+  .cache-title { font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+  .cache-line { display: flex; gap: 10px; margin-top: 6px; font-size: 12px; line-height: 1.5; }
+  .cache-label { flex: 0 0 68px; color: var(--vscode-descriptionForeground); }
+  .cache-value { min-width: 0; word-break: break-all; }
+  .cache-path { font-family: var(--vscode-editor-font-family, monospace); }
+  .cache-note { color: var(--vscode-descriptionForeground); margin-top: 10px; font-size: 11px; }
+  .cache-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+  button.danger {
+    background: var(--vscode-testing-iconFailed, #c42b1c);
+    color: #fff;
+  }
+  button.danger:hover { background: #a1261a; }
 </style>
 </head>
 <body>
   <h2>AI 翻译引擎 · API Key 与模型</h2>
   <div class="hint">为要启用的引擎填入 API Key（密文存储，不回显），并在下拉中选择官方模型。保存后该引擎即出现在「选择翻译引擎」中。</div>
   <div id="list"></div>
+  <div class="cache-card">
+    <div class="cache-title">媒体缓存</div>
+    <div class="cache-line"><span class="cache-label">缓存路径</span><span id="cache-path" class="cache-value cache-path">读取中…</span></div>
+    <div class="cache-line"><span class="cache-label">缓存体积</span><span id="cache-size" class="cache-value">读取中…</span></div>
+    <div class="cache-note">缓存硬上限为 10 GB，达到上限后自动删除最旧文件。</div>
+    <div class="cache-actions"><button id="clear-cache" class="danger">一键清理缓存</button></div>
+  </div>
   <div class="toast" id="toast"></div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const list = document.getElementById('list');
     const toast = document.getElementById('toast');
+    document.getElementById('clear-cache').addEventListener('click', function () {
+      vscode.postMessage({ type: 'clearCache' });
+    });
 
     function showToast(msg) {
       toast.textContent = msg;
       toast.classList.add('show');
       setTimeout(function () { toast.classList.remove('show'); }, 1400);
+    }
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+      var units = ['B', 'KB', 'MB', 'GB'];
+      var index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+      return (bytes / Math.pow(1024, index)).toFixed(index >= 2 ? 2 : 1) + ' ' + units[index];
+    }
+
+    function renderCache(cache) {
+      if (!cache) return;
+      document.getElementById('cache-path').textContent = cache.path;
+      document.getElementById('cache-size').textContent =
+        formatBytes(cache.bytes) + ' / ' + formatBytes(cache.maxBytes) + '（' + cache.files + ' 个文件）';
     }
 
     function render(items) {
@@ -298,7 +409,10 @@ export class SettingsPanel {
 
     window.addEventListener('message', function (e) {
       var m = e.data;
-      if (m.type === 'init') render(m.items);
+      if (m.type === 'init') { render(m.items); renderCache(m.cache); }
+      else if (m.type === 'cacheInfo') renderCache(m.cache);
+      else if (m.type === 'cacheCleared') { renderCache(m.cache); showToast('缓存已清理'); }
+      else if (m.type === 'cacheError') showToast('清理失败：' + m.message);
       else if (m.type === 'updated') setStatus(m.provider, m.configured);
     });
   </script>

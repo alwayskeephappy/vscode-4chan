@@ -1,6 +1,15 @@
 import type { Board, CatalogPage, Post } from '../src/types';
 import { boardZh } from '../src/boards-zh';
 
+declare const JSMpeg: {
+  Player: new (url: string, options: Record<string, unknown>) => {
+    play(): void;
+    pause(): void;
+    destroy(): void;
+    paused: boolean;
+  };
+};
+
 export interface VsCodeApi {
   postMessage(msg: unknown): void;
   getState<T>(): T | undefined;
@@ -318,6 +327,10 @@ export function render(vscode: VsCodeApi) {
         <button id="overlay-download" class="overlay-download" title="下载原图">⬇</button>
         <img id="overlay-img" referrerpolicy="no-referrer" alt="" />
         <video id="overlay-video" autoplay loop controls muted playsinline referrerpolicy="no-referrer"></video>
+        <div id="overlay-jsmpeg-wrap" class="overlay-jsmpeg-wrap" hidden>
+          <canvas id="overlay-jsmpeg" title="点击暂停/继续"></canvas>
+          <button id="overlay-jsmpeg-toggle" class="overlay-jsmpeg-toggle" title="暂停" aria-label="暂停">⏸</button>
+        </div>
         <div id="overlay-loading" class="overlay-loading">⏳ 加载中…</div>
         <div id="overlay-err" class="overlay-err hidden"></div>
       </div>
@@ -507,6 +520,29 @@ export function render(vscode: VsCodeApi) {
       e.stopPropagation();
       downloadCurrentMedia();
     });
+    const jsmpegToggle = document.getElementById('overlay-jsmpeg-toggle') as HTMLButtonElement | null;
+    const toggleJsmpeg = () => {
+      if (!jsmpegPlayer || !jsmpegToggle) return;
+      if (jsmpegPlayer.paused) {
+        jsmpegPlayer.play();
+        jsmpegToggle.textContent = '⏸';
+        jsmpegToggle.title = '暂停';
+        jsmpegToggle.setAttribute('aria-label', '暂停');
+      } else {
+        jsmpegPlayer.pause();
+        jsmpegToggle.textContent = '▶';
+        jsmpegToggle.title = '播放';
+        jsmpegToggle.setAttribute('aria-label', '播放');
+      }
+    };
+    jsmpegToggle?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleJsmpeg();
+    });
+    document.getElementById('overlay-jsmpeg')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleJsmpeg();
+    });
 
     document.getElementById('nsfw-ok')?.addEventListener('click', () => {
       const board = pendingNsfwBoard;
@@ -543,15 +579,20 @@ export function render(vscode: VsCodeApi) {
   }
 
   // 图片/视频预览查看器：缩放 / 拖拽 / 关闭（render 作用域注册一次，状态闭包持有）
-  // 优先直连 i.4cdn.org（webm/mp4 用 <video> 渲染）；直连被防盗链拦截时走扩展宿主兜底（base64 data URL，不落盘）
-  const imageCache = new Map<string, string>(); // url -> base64 data url（兜底缓存）
+  // 优先直连 i.4cdn.org；失败时由扩展宿主缓存文件并返回 Webview 本地资源 URI。
+  const imageCache = new Map<string, string>(); // 原始 URL -> Webview 缓存资源 URI
+  const compatibleCache = new Map<string, string>(); // 原始 URL -> MPEG-TS Blob URL
+  const transcodeRequested = new Set<string>();
+  let jsmpegPlayer: InstanceType<typeof JSMpeg.Player> | undefined;
+  let jsmpegLoadTimer = 0;
   let pendingKey = ''; // 正在请求的原图 URL
   let pendingNsfwBoard = ''; // 待确认的成人板块
   let ovScale = 1, ovTx = 0, ovTy = 0;
   const ovMediaEls = () => {
     const img = document.getElementById('overlay-img');
     const vid = document.getElementById('overlay-video');
-    return [img, vid].filter(Boolean) as HTMLElement[];
+    const jsmpegWrap = document.getElementById('overlay-jsmpeg-wrap');
+    return [img, vid, jsmpegWrap].filter(Boolean) as HTMLElement[];
   };
   const ovVisible = () => {
     const o = document.getElementById('overlay');
@@ -587,9 +628,15 @@ export function render(vscode: VsCodeApi) {
   const ovClose = () => {
     const vid = document.getElementById('overlay-video') as HTMLVideoElement | null;
     if (vid) {
+      vid.onerror = null;
       vid.pause();
       vid.src = '';
     }
+    jsmpegPlayer?.destroy();
+    jsmpegPlayer = undefined;
+    window.clearTimeout(jsmpegLoadTimer);
+    const jsmpegWrap = document.getElementById('overlay-jsmpeg-wrap') as HTMLElement | null;
+    if (jsmpegWrap) jsmpegWrap.hidden = true;
     document.getElementById('overlay')?.classList.add('hidden');
     ovReset();
     ovErr('');
@@ -597,17 +644,35 @@ export function render(vscode: VsCodeApi) {
     pendingKey = '';
   };
   const mediaOf = (url: string): 'video' | 'image' => (/\.(webm|mp4)(?:[?#]|$)/i.test(url) ? 'video' : 'image');
-  const showMedia = (uri: string, media: 'video' | 'image') => {
+  const showMedia = (uri: string, media: 'video' | 'image', isFallback = false) => {
     const img = document.getElementById('overlay-img') as HTMLImageElement | null;
     const vid = document.getElementById('overlay-video') as HTMLVideoElement | null;
     if (!img || !vid) return;
+    jsmpegPlayer?.destroy();
+    jsmpegPlayer = undefined;
+    window.clearTimeout(jsmpegLoadTimer);
+    const jsmpegWrap = document.getElementById('overlay-jsmpeg-wrap') as HTMLElement | null;
+    if (jsmpegWrap) jsmpegWrap.hidden = true;
     ovLoading(false);
     ovErr('');
     if (media === 'video') {
       img.hidden = true;
       vid.hidden = false;
-      // 直连失败 → 走扩展宿主兜底；data URL 失败则直接报错（避免循环重试）
-      vid.onerror = () => (uri.startsWith('data:') ? ovErr('⚠ 视频加载失败') : fallback(uri, 'video'));
+      vid.onerror = () => {
+        if (!isFallback) fallback(uri, 'video');
+        else if (
+          (vid.error?.code === MediaError.MEDIA_ERR_DECODE || vid.error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED)
+          && ovOrigSrc
+          && !transcodeRequested.has(ovOrigSrc)
+        ) {
+          transcodeRequested.add(ovOrigSrc);
+          ovErr('');
+          ovLoading(true);
+          send({ type: 'transcodeMedia', url: ovOrigSrc });
+        } else {
+          ovErr(`⚠ 缓存资源仍无法播放（媒体错误 ${vid.error?.code ?? '未知'}）`);
+        }
+      };
       vid.src = uri;
       void vid.play().catch(() => {});
     } else {
@@ -616,15 +681,67 @@ export function render(vscode: VsCodeApi) {
       vid.src = '';
       img.hidden = false;
       img.onload = () => ovErr('');
-      img.onerror = () => (uri.startsWith('data:') ? ovErr('⚠ 图片加载失败') : fallback(uri, 'image'));
+      img.onerror = () => (isFallback ? ovErr('⚠ 图片加载失败') : fallback(uri, 'image'));
       img.src = uri;
+    }
+  };
+  const showJsmpeg = (uri: string) => {
+    const img = document.getElementById('overlay-img') as HTMLImageElement | null;
+    const vid = document.getElementById('overlay-video') as HTMLVideoElement | null;
+    const canvas = document.getElementById('overlay-jsmpeg') as HTMLCanvasElement | null;
+    const toggle = document.getElementById('overlay-jsmpeg-toggle') as HTMLButtonElement | null;
+    const wrap = document.getElementById('overlay-jsmpeg-wrap') as HTMLElement | null;
+    if (!img || !vid || !canvas || !toggle || !wrap) return;
+    vid.onerror = null; // Prevent clearing the old native source from reporting a stale error.
+    vid.pause();
+    vid.src = '';
+    vid.hidden = true;
+    img.hidden = true;
+    wrap.hidden = false;
+    jsmpegPlayer?.destroy();
+    window.clearTimeout(jsmpegLoadTimer);
+    try {
+      jsmpegPlayer = new JSMpeg.Player(uri, {
+        canvas,
+        autoplay: true,
+        loop: true,
+        audio: false,
+        disableWebAssembly: true,
+        progressive: false,
+        throttled: false,
+        onSourceEstablished: () => {
+          ovLoading(true);
+          const loading = document.getElementById('overlay-loading');
+          if (loading) loading.textContent = '⏳ 正在解码…';
+        },
+        onVideoDecode: () => {
+          window.clearTimeout(jsmpegLoadTimer);
+          ovLoading(false);
+          ovErr('');
+        },
+      });
+      toggle.textContent = '⏸';
+      toggle.title = '暂停';
+      toggle.setAttribute('aria-label', '暂停');
+      ovLoading(true);
+      const loading = document.getElementById('overlay-loading');
+      if (loading) loading.textContent = '⏳ 读取缓存…';
+      ovErr('');
+      jsmpegLoadTimer = window.setTimeout(() => {
+        ovLoading(false);
+        ovErr('⚠ 内置播放器等待首帧超时');
+      }, 15_000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ovLoading(false);
+      ovErr('⚠ 内置播放器启动失败：' + message);
     }
   };
   const fallback = (url: string, media: 'video' | 'image') => {
     if (url !== pendingKey) return; // 已被更新的打开操作取代
     const cached = imageCache.get(url);
     if (cached) {
-      showMedia(cached, media);
+      showMedia(cached, media, true);
       return;
     }
     ovErr('');
@@ -640,7 +757,9 @@ export function render(vscode: VsCodeApi) {
     ovOrigSrc = src;
     ovReset();
     overlay.classList.remove('hidden');
-    showMedia(src, mediaOf(src)); // 优先直连加载，被防盗链拦截时自动降级
+    const compatible = compatibleCache.get(src);
+    if (compatible) showJsmpeg(compatible);
+    else showMedia(src, mediaOf(src));
   };
 
   // 下载原图：交给宿主（Node 环境）fetch + 保存对话框
@@ -744,10 +863,38 @@ export function render(vscode: VsCodeApi) {
         break;
       }
       case 'img': {
-        imageCache.set(m.url, m.data);
+        imageCache.set(m.url, m.src);
         if (m.url === pendingKey) {
           pendingKey = '';
-          showMedia(m.data, mediaOf(m.url));
+          showMedia(m.src, mediaOf(m.url), true);
+        }
+        break;
+      }
+      case 'transcodedMedia': {
+        const blobSrc = String(m.src);
+        const previous = compatibleCache.get(m.url);
+        compatibleCache.set(m.url, blobSrc);
+        // Blob media is intentionally kept only for a small recency window; the disk
+        // cache remains authoritative and can be read again without re-transcoding.
+        if (compatibleCache.size > 8) {
+          const oldest = compatibleCache.keys().next().value;
+          if (oldest !== undefined && oldest !== m.url) {
+            const oldSrc = compatibleCache.get(oldest);
+            compatibleCache.delete(oldest);
+            void oldSrc;
+          }
+        }
+        if (m.url === ovOrigSrc && ovVisible()) {
+          ovLoading(false);
+          showJsmpeg(blobSrc);
+        }
+        break;
+      }
+      case 'transcodeError': {
+        transcodeRequested.delete(m.url); // 关闭后重新打开时允许再次尝试
+        if (m.url === ovOrigSrc && ovVisible()) {
+          ovLoading(false);
+          ovErr('⚠ 兼容转码失败：' + m.message);
         }
         break;
       }

@@ -416,7 +416,8 @@ body {
 }
 
 .overlay img,
-.overlay video {
+.overlay video,
+.overlay-jsmpeg-wrap {
   max-width: 94%;
   max-height: 94%;
   object-fit: contain;
@@ -426,8 +427,51 @@ body {
 }
 
 .overlay img[hidden],
-.overlay video[hidden] {
+.overlay video[hidden],
+.overlay-jsmpeg-wrap[hidden] {
   display: none;
+}
+
+.overlay-jsmpeg-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+
+.overlay-jsmpeg-wrap canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 94vh;
+  object-fit: contain;
+}
+
+.overlay-jsmpeg-toggle {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 103;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  background: rgba(20, 20, 20, 0.72);
+  color: #fff;
+  font-size: 17px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(3px);
+}
+
+.overlay-jsmpeg-toggle:hover {
+  background: rgba(45, 45, 45, 0.9);
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
 .overlay-loading {

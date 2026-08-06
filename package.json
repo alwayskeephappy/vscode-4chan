@@ -2,7 +2,7 @@
   "name": "vscode-4chan",
   "displayName": "vscode-4chan",
   "description": "在 VSCode 侧边栏浏览 4chan（只读），含免费/AI 帖子翻译",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "icon": "media/icon-128.png",
   "publisher": "utopiaExist",
   "engines": {
@@ -92,6 +92,7 @@
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.80.0",
     "esbuild": "^0.20.2",
+    "ffmpeg-static": "^5.2.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   }

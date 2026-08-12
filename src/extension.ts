@@ -143,7 +143,7 @@ type OutMsg =
   | { type: 'thread'; board: string; posts: Post[] }
   | { type: 'favorites'; favorites: string[] }
   | { type: 'translated'; results: { no: number; text: string }[] }
-  | { type: 'translateError'; no?: number; message: string }
+  | { type: 'translateError'; nos: number[]; message: string }
   | { type: 'error'; message: string }
   | { type: 'img'; url: string; src: string }
   | { type: 'transcodedMedia'; url: string; src: string }
@@ -268,16 +268,25 @@ class FourChanViewProvider implements vscode.WebviewViewProvider {
   ) {
     const cfg = await this.buildTranslateConfig();
     const ok: { no: number; text: string }[] = [];
+    const failedNos: number[] = [];
+    let failedMsg = '';
     for (const p of posts) {
       try {
         const zh = await translate(p.text, cfg);
         ok.push({ no: p.no, text: zh });
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        await send({ type: 'translateError', no: p.no, message });
+        failedNos.push(p.no);
+        if (!failedMsg) failedMsg = e instanceof Error ? e.message : String(e);
       }
     }
     if (ok.length) await send({ type: 'translated', results: ok });
+    // 批量失败合并为一条错误，避免逐条回包导致前端横幅反复刷新、3s 计时器无法到期
+    if (failedNos.length) {
+      const message = failedNos.length === 1
+        ? failedMsg
+        : `${failedMsg}（共 ${failedNos.length} 条失败）`;
+      await send({ type: 'translateError', nos: failedNos, message });
+    }
   }
 
   private cfg() {

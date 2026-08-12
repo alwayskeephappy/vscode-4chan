@@ -329,29 +329,6 @@ export function render(vscode: VsCodeApi) {
       </div>
       <div class="main">${main}</div>
       ${paginatorBar}
-      <div id="overlay" class="overlay hidden">
-        <button id="overlay-close" class="overlay-close" title="关闭 (Esc)">✕</button>
-        <button id="overlay-download" class="overlay-download" title="下载原图">⬇</button>
-        <img id="overlay-img" referrerpolicy="no-referrer" alt="" />
-        <video id="overlay-video" autoplay loop controls muted playsinline referrerpolicy="no-referrer"></video>
-        <div id="overlay-jsmpeg-wrap" class="overlay-jsmpeg-wrap" hidden>
-          <canvas id="overlay-jsmpeg" title="点击暂停/继续"></canvas>
-          <button id="overlay-jsmpeg-toggle" class="overlay-jsmpeg-toggle" title="暂停" aria-label="暂停">⏸</button>
-        </div>
-        <div id="overlay-loading" class="overlay-loading">⏳ 加载中…</div>
-        <div id="overlay-err" class="overlay-err hidden"></div>
-      </div>
-      <div id="nsfw-modal" class="nsfw-modal hidden">
-        <div class="nsfw-dialog">
-          <div class="nsfw-title">⚠ 成人内容提示</div>
-          <div class="nsfw-text">你即将进入 <span id="nsfw-board">/xxx/</span> 版块，该版块可能包含成人及敏感内容。</div>
-          <div class="nsfw-text2">本工具仅供技术演示学习，所有内容均来自 4chan，版权归原发布者所有，与本扩展开发者无关。</div>
-          <div class="nsfw-btns">
-            <button id="nsfw-cancel">取消</button>
-            <button id="nsfw-ok">仍然进入</button>
-          </div>
-        </div>
-      </div>
     `;
   }
 
@@ -516,51 +493,6 @@ export function render(vscode: VsCodeApi) {
           void downloadCurrentMedia();
         }
       });
-    });
-
-    document.getElementById('overlay-close')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      ovClose();
-    });
-
-    document.getElementById('overlay-download')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      downloadCurrentMedia();
-    });
-    const jsmpegToggle = document.getElementById('overlay-jsmpeg-toggle') as HTMLButtonElement | null;
-    const toggleJsmpeg = () => {
-      if (!jsmpegPlayer || !jsmpegToggle) return;
-      if (jsmpegPlayer.paused) {
-        jsmpegPlayer.play();
-        jsmpegToggle.textContent = '⏸';
-        jsmpegToggle.title = '暂停';
-        jsmpegToggle.setAttribute('aria-label', '暂停');
-      } else {
-        jsmpegPlayer.pause();
-        jsmpegToggle.textContent = '▶';
-        jsmpegToggle.title = '播放';
-        jsmpegToggle.setAttribute('aria-label', '播放');
-      }
-    };
-    jsmpegToggle?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleJsmpeg();
-    });
-    document.getElementById('overlay-jsmpeg')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleJsmpeg();
-    });
-
-    document.getElementById('nsfw-ok')?.addEventListener('click', () => {
-      const board = pendingNsfwBoard;
-      hideNsfwModal();
-      if (board) loadBoard(board);
-    });
-    document.getElementById('nsfw-cancel')?.addEventListener('click', () => {
-      hideNsfwModal();
-    });
-    document.getElementById('nsfw-modal')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) hideNsfwModal(); // 点击遮罩取消
     });
 
     // 帖内引用链接：>>123456 跳转高亮；http 外链交给宿主用系统浏览器打开
@@ -797,6 +729,20 @@ export function render(vscode: VsCodeApi) {
     ovScale = ns;
     ovApply();
   }, { passive: false });
+
+  // 在 .main 顶部插入错误提示，并在最后一次触发 3s 后自动隐藏（防抖：
+  // 「翻译全部」连发多条 translateError 时，只在最后一条后计时）。
+  let errHideTimer = 0;
+  const showErr = (html: string) => {
+    const mainEl = document.querySelector('.main');
+    if (!mainEl) return;
+    mainEl.insertAdjacentHTML('afterbegin', html);
+    window.clearTimeout(errHideTimer);
+    errHideTimer = window.setTimeout(() => {
+      document.querySelectorAll('.main > .err').forEach((el) => el.remove());
+    }, 3000);
+  };
+
   window.addEventListener('message', (e) => {
     const m = e.data;
     switch (m.type) {
@@ -856,11 +802,11 @@ export function render(vscode: VsCodeApi) {
         paint(true);
         break;
       case 'translateError': {
-        if (m.no != null) translating.delete(pkey(m.no));
+        const nos: number[] = Array.isArray(m.nos) ? m.nos : [];
+        nos.forEach((no) => translating.delete(pkey(no)));
         translatingAll = false;
         paint(true);
-        const mainEl = document.querySelector('.main');
-        mainEl?.insertAdjacentHTML('afterbegin', `<div class="err">⚠ 翻译失败：${esc(m.message)}</div>`);
+        showErr(`<div class="err">⚠ 翻译失败：${esc(m.message)}</div>`);
         break;
       }
       case 'error': {
@@ -926,6 +872,77 @@ export function render(vscode: VsCodeApi) {
     }, 80);
   });
   ro.observe(app);
+
+  // 图片/视频查看器与成人确认框是常驻 DOM：挂在 body 上，独立于 #app 的重渲染。
+  // 这样 paint() 重写 app.innerHTML（如「翻译全部」回包）时不会销毁正在播放的动图/
+  // 视频，也不会因重复创建节点导致 JSMpeg 反复重启。事件仅绑定一次。
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="overlay" class="overlay hidden">
+      <button id="overlay-close" class="overlay-close" title="关闭 (Esc)">✕</button>
+      <button id="overlay-download" class="overlay-download" title="下载原图">⬇</button>
+      <img id="overlay-img" referrerpolicy="no-referrer" alt="" />
+      <video id="overlay-video" autoplay loop controls muted playsinline referrerpolicy="no-referrer"></video>
+      <div id="overlay-jsmpeg-wrap" class="overlay-jsmpeg-wrap" hidden>
+        <canvas id="overlay-jsmpeg" title="点击暂停/继续"></canvas>
+        <button id="overlay-jsmpeg-toggle" class="overlay-jsmpeg-toggle" title="暂停" aria-label="暂停">⏸</button>
+      </div>
+      <div id="overlay-loading" class="overlay-loading">⏳ 加载中…</div>
+      <div id="overlay-err" class="overlay-err hidden"></div>
+    </div>
+    <div id="nsfw-modal" class="nsfw-modal hidden">
+      <div class="nsfw-dialog">
+        <div class="nsfw-title">⚠ 成人内容提示</div>
+        <div class="nsfw-text">你即将进入 <span id="nsfw-board">/xxx/</span> 版块，该版块可能包含成人及敏感内容。</div>
+        <div class="nsfw-text2">本工具仅供技术演示学习，所有内容均来自 4chan，版权归原发布者所有，与本扩展开发者无关。</div>
+        <div class="nsfw-btns">
+          <button id="nsfw-cancel">取消</button>
+          <button id="nsfw-ok">仍然进入</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('overlay-close')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    ovClose();
+  });
+  document.getElementById('overlay-download')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    downloadCurrentMedia();
+  });
+  const jsmpegToggle = document.getElementById('overlay-jsmpeg-toggle') as HTMLButtonElement | null;
+  const toggleJsmpeg = () => {
+    if (!jsmpegPlayer || !jsmpegToggle) return;
+    if (jsmpegPlayer.paused) {
+      jsmpegPlayer.play();
+      jsmpegToggle.textContent = '⏸';
+      jsmpegToggle.title = '暂停';
+      jsmpegToggle.setAttribute('aria-label', '暂停');
+    } else {
+      jsmpegPlayer.pause();
+      jsmpegToggle.textContent = '▶';
+      jsmpegToggle.title = '播放';
+      jsmpegToggle.setAttribute('aria-label', '播放');
+    }
+  };
+  jsmpegToggle?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleJsmpeg();
+  });
+  document.getElementById('overlay-jsmpeg')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleJsmpeg();
+  });
+  document.getElementById('nsfw-ok')?.addEventListener('click', () => {
+    const board = pendingNsfwBoard;
+    hideNsfwModal();
+    if (board) loadBoard(board);
+  });
+  document.getElementById('nsfw-cancel')?.addEventListener('click', () => {
+    hideNsfwModal();
+  });
+  document.getElementById('nsfw-modal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) hideNsfwModal(); // 点击遮罩取消
+  });
 
   send({ type: 'init' });
   paint();

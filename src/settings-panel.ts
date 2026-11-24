@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { PROVIDERS, type Provider } from './translate';
+import { PROVIDERS, fetchModels, type Provider } from './translate';
 
 const CONFIG_NS = 'vscode-4chan.translate';
 const secretKey = (p: Provider) => `${CONFIG_NS}.key.${p}`;
@@ -74,11 +74,13 @@ export class SettingsPanel {
           if (!key) return;
           await secrets.store(secretKey(m.provider), key);
           send({ type: 'updated', provider: m.provider, configured: true });
+          void SettingsPanel.refreshModels(panel, secrets, globalState, m.provider);
           break;
         }
         case 'clear':
           await secrets.delete(secretKey(m.provider));
           send({ type: 'updated', provider: m.provider, configured: false });
+          void SettingsPanel.refreshModels(panel, secrets, globalState, m.provider);
           break;
         case 'setModel':
           await globalState.update(modelKey(m.provider), m.model);
@@ -125,20 +127,58 @@ export class SettingsPanel {
     secrets: vscode.SecretStorage,
     globalState: vscode.Memento,
   ): Promise<ItemState[]> {
-    const items: ItemState[] = [];
-    for (const p of AI_PROVIDERS) {
-      const meta = PROVIDERS[p];
-      const saved = globalState.get<string>(modelKey(p));
-      items.push({
-        provider: p,
-        label: meta.label,
-        configured: !!(await secrets.get(secretKey(p))),
-        models: meta.models,
-        model: saved || meta.model,
-        link: meta.keyLink,
-      });
+    // 已配置 Key 的引擎实时拉取官方模型列表（失败回退到内置静态列表）
+    return Promise.all(
+      AI_PROVIDERS.map(async (p): Promise<ItemState> => {
+        const meta = PROVIDERS[p];
+        const apiKey = await secrets.get(secretKey(p));
+        const saved = globalState.get<string>(modelKey(p));
+        let models = meta.models;
+        if (apiKey) {
+          try {
+            const live = await fetchModels(meta.baseUrl, apiKey);
+            if (live.length) models = live;
+          } catch {
+            /* 网络/鉴权失败：保留静态列表 */
+          }
+        }
+        return {
+          provider: p,
+          label: meta.label,
+          configured: !!apiKey,
+          models,
+          model: saved || meta.model,
+          link: meta.keyLink,
+        };
+      }),
+    );
+  }
+
+  /** 重新拉取某个引擎的模型列表并推送给 webview（保存/清除 Key 后调用） */
+  private static async refreshModels(
+    panel: vscode.WebviewPanel,
+    secrets: vscode.SecretStorage,
+    globalState: vscode.Memento,
+    provider: Provider,
+  ) {
+    const meta = PROVIDERS[provider];
+    const apiKey = await secrets.get(secretKey(provider));
+    let models = meta.models;
+    if (apiKey) {
+      try {
+        const live = await fetchModels(meta.baseUrl, apiKey);
+        if (live.length) models = live;
+      } catch {
+        /* ignore */
+      }
     }
-    return items;
+    const saved = globalState.get<string>(modelKey(provider));
+    void panel.webview.postMessage({
+      type: 'models',
+      provider,
+      models,
+      model: saved || meta.model,
+    });
   }
 
   private static async readCacheInfo(cacheUri: vscode.Uri, maxBytes: number): Promise<CacheInfo> {
@@ -303,22 +343,24 @@ export class SettingsPanel {
         formatBytes(cache.bytes) + ' / ' + formatBytes(cache.maxBytes) + '（' + cache.files + ' 个文件）';
     }
 
+    function modelFieldHtml(it) {
+      if (!it.models || !it.models.length) {
+        return '<input class="model" value="' + it.model + '" title="模型" />';
+      }
+      var inList = it.models.indexOf(it.model) !== -1;
+      var opts = it.models.map(function (m) {
+        return '<option value="' + m + '"' + (inList && m === it.model ? ' selected' : '') + '>' + m + '</option>';
+      }).join('');
+      // 当前模型不在官方列表（自定义/旧值）时追加一项，保证可见可选
+      if (!inList) opts = '<option value="' + it.model + '" selected>' + it.model + '</option>' + opts;
+      return '<select class="model" title="选择模型">' + opts + '</select>';
+    }
+
     function render(items) {
       list.innerHTML = items.map(function (it) {
         var sc = it.configured ? 'on' : 'off';
         var st = it.configured ? '● 已配置' : '○ 未配置';
-        var modelField = '';
-        if (it.models && it.models.length) {
-          var inList = it.models.indexOf(it.model) !== -1;
-          var opts = it.models.map(function (m) {
-            return '<option value="' + m + '"' + (inList && m === it.model ? ' selected' : '') + '>' + m + '</option>';
-          }).join('');
-          // 当前模型不在官方列表（自定义/旧值）时追加一项，保证可见可选
-          if (!inList) opts = '<option value="' + it.model + '" selected>' + it.model + '</option>' + opts;
-          modelField = '<select class="model" title="选择模型">' + opts + '</select>';
-        } else {
-          modelField = '<input class="model" value="' + it.model + '" title="模型" />';
-        }
+        var modelField = modelFieldHtml(it);
         var inputAttrs = it.configured
           ? 'type="password" placeholder="密钥已配置（密文存储）" readonly'
           : 'type="password" placeholder="填入 API Key"';
@@ -372,6 +414,28 @@ export class SettingsPanel {
       }
     }
 
+    function bindModelSelect(row, provider) {
+      var sel = row.querySelector('select.model');
+      if (sel) sel.addEventListener('change', function () {
+        vscode.postMessage({ type: 'setModel', provider: provider, model: sel.value });
+        showToast('模型已切换为 ' + sel.value);
+      });
+    }
+
+    // 后端拉到官方最新模型后，原地替换该行的下拉框,保留用户已选/已保存模型
+    function updateModels(provider, models, model) {
+      var row = list.querySelector('.row[data-provider="' + provider + '"]');
+      if (!row) return;
+      var host = row.querySelector('.controls');
+      var old = host.querySelector('.model');
+      var wrap = document.createElement('div');
+      wrap.innerHTML = modelFieldHtml({ models: models, model: model });
+      var next = wrap.firstChild;
+      if (!old || !next) return;
+      old.replaceWith(next);
+      bindModelSelect(row, provider);
+    }
+
     function bind() {
       list.querySelectorAll('.row').forEach(function (row) {
         var provider = row.dataset.provider;
@@ -392,11 +456,7 @@ export class SettingsPanel {
           vscode.postMessage({ type: 'clear', provider: provider });
           showToast('已清除');
         });
-        var sel = row.querySelector('select.model');
-        if (sel) sel.addEventListener('change', function () {
-          vscode.postMessage({ type: 'setModel', provider: provider, model: sel.value });
-          showToast('模型已切换为 ' + sel.value);
-        });
+        bindModelSelect(row, provider);
         var lk = row.querySelector('.getlink');
         if (lk) lk.addEventListener('click', function () {
           vscode.postMessage({ type: 'openLink', url: lk.dataset.link });
@@ -414,6 +474,7 @@ export class SettingsPanel {
       else if (m.type === 'cacheCleared') { renderCache(m.cache); showToast('缓存已清理'); }
       else if (m.type === 'cacheError') showToast('清理失败：' + m.message);
       else if (m.type === 'updated') setStatus(m.provider, m.configured);
+      else if (m.type === 'models') updateModels(m.provider, m.models, m.model);
     });
   </script>
 </body>

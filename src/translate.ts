@@ -88,6 +88,35 @@ export async function translate(text: string, cfg: TranslateConfig): Promise<str
   }
 }
 
+/** 过滤掉非对话类模型（embedding/rerank/tts 等），避免下拉里混杂无关项 */
+const NON_CHAT = /embed|rerank|moderation|whisper|tts|transcri|audio|image|dall-e|vision-ocr/i;
+
+/**
+ * 通过 OpenAI 兼容的 GET /models 拉取官方最新模型列表（去重、排序、过滤非对话模型）。
+ * 失败时抛出，由调用方回退到内置静态列表。
+ */
+export async function fetchModels(baseUrl: string, apiKey: string): Promise<string[]> {
+  const base = (baseUrl || '').replace(/\/$/, '');
+  if (!base) return [];
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const res = await fetch(`${base}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(await errMsg(res));
+    const data = (await res.json()) as { data?: { id?: unknown }[] };
+    const ids = (data.data ?? [])
+      .map((m) => m.id)
+      .filter((id): id is string => typeof id === 'string' && !!id)
+      .filter((id) => !NON_CHAT.test(id));
+    return [...new Set(ids)].sort();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function clean(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
